@@ -355,15 +355,18 @@
   function injectUserBar(profile){
     var bar = document.createElement('div');
     bar.id = 'userBar';
-    bar.style.cssText = 'position:fixed;top:10px;right:10px;z-index:1002;display:flex;gap:8px;align-items:center;background:rgba(20,22,25,.75);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:6px 12px;font-size:11px;color:#f2f0ea;font-family:Vazirmatn,sans-serif;';
+    bar.style.cssText = 'position:fixed;top:10px;right:10px;z-index:1002;display:flex;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100vw - 20px);gap:8px;align-items:center;background:rgba(20,22,25,.75);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:6px 12px;font-size:11px;color:#f2f0ea;font-family:Vazirmatn,sans-serif;';
     var roleFa = profile.role==='admin' ? 'مدیر' : (profile.role==='editor' ? 'ویرایشگر' : 'مشاهده‌گر');
     bar.innerHTML = '<span>'+(profile.full_name||profile.email)+' · '+roleFa+'</span>' +
       (profile.role==='admin' ? '<button id="adminPanelBtn2" style="background:#c8791f;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-family:inherit;">مدیریت کاربران</button>' : '') +
       (profile.role==='admin' ? '<button id="loginLogBtn" style="background:transparent;color:#f2f0ea;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:4px 8px;cursor:pointer;font-family:inherit;">لیست ورودها</button>' : '') +
+      '<button id="annBellBtn" title="اعلان‌ها" style="position:relative;background:transparent;color:#f2f0ea;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:4px 8px;cursor:pointer;font-family:inherit;">🔔 اعلان‌ها<span id="annBadge" style="display:none;position:absolute;top:-7px;left:-7px;min-width:16px;height:16px;line-height:16px;border-radius:8px;background:#d64545;color:#fff;font-size:10px;text-align:center;padding:0 4px;">0</span></button>' +
+      (profile.role==='admin' ? '<button id="annSendBtn" style="background:#c8791f;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-family:inherit;">ارسال اعلان</button>' : '') +
       '<button id="agLogoutBtn" style="background:transparent;color:#e0a24a;border:1px solid rgba(224,162,74,.5);border-radius:6px;padding:4px 8px;cursor:pointer;font-family:inherit;">خروج</button>';
     document.body.appendChild(bar);
     q('agLogoutBtn').onclick = async function(){ await forceSignOut(); };
     if(profile.role==='admin'){ q('adminPanelBtn2').onclick = openAdminPanel; q('loginLogBtn').onclick = openLoginLog; }
+    initAnnouncements(profile);
   }
 
   async function openLoginLog(){
@@ -527,6 +530,230 @@
       };
     });
   }
+
+  /* ================= اعلان‌ها (Announcements) ================= */
+  var ANN = { all: [], reads: {}, profile: null, timer: null, lastUnread: 0 };
+  var ANN_ROLE_FA = { admin:'مدیر', editor:'ویرایشگر', viewer:'مشاهده‌گر' };
+  var ANN_INP = 'width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#f2f0ea;font-family:inherit;font-size:13px;box-sizing:border-box;';
+  var ANN_BOX = 'background:#1c1f22;border:1px solid rgba(200,121,31,.4);border-radius:14px;max-width:640px;width:100%;max-height:85vh;overflow:auto;padding:24px;font-family:Vazirmatn,sans-serif;color:#f2f0ea;direction:rtl;';
+  var ANN_OVERLAY = 'position:fixed;inset:0;z-index:10000;background:rgba(10,11,13,.75);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:20px;';
+
+  function annEsc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+  function annDate(iso){
+    try{ return new Date(iso).toLocaleString('fa-IR', { dateStyle:'medium', timeStyle:'short' }); }
+    catch(e){ return iso || ''; }
+  }
+  function annForMe(a){
+    var p = ANN.profile;
+    if(a.audience_all) return true;
+    if((a.target_roles || []).indexOf(p.role) !== -1) return true;
+    if((a.target_user_ids || []).indexOf(p.id) !== -1) return true;
+    return false;
+  }
+  function annMine(){ return ANN.all.filter(function(a){ return a.is_active && annForMe(a); }); }
+  function annUnreadCount(){ return annMine().filter(function(a){ return !ANN.reads[a.id]; }).length; }
+  function annUpdateBadge(){
+    var b = q('annBadge'); if(!b) return;
+    var n = annUnreadCount();
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.style.display = n ? 'block' : 'none';
+  }
+  function annToast(msg){
+    var t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:10001;background:#c8791f;color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-family:Vazirmatn,sans-serif;cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.4);';
+    t.textContent = '🔔 ' + msg;
+    t.onclick = function(){ t.remove(); openAnnouncements(); };
+    document.body.appendChild(t);
+    setTimeout(function(){ if(t.parentNode) t.remove(); }, 8000);
+  }
+
+  async function annFetch(){
+    var a = await sb.from('announcements').select('*').order('created_at', { ascending:false }).limit(200);
+    if(a.error){ console.error('announcements fetch failed', a.error); return false; }
+    var r = await sb.from('announcement_reads').select('announcement_id').eq('user_id', ANN.profile.id);
+    if(r.error){ console.error('announcement_reads fetch failed', r.error); return false; }
+    ANN.all = a.data || [];
+    ANN.reads = {};
+    (r.data || []).forEach(function(x){ ANN.reads[x.announcement_id] = true; });
+    return true;
+  }
+
+  async function annRefresh(first){
+    if(!(await annFetch())) return;
+    var n = annUnreadCount();
+    annUpdateBadge();
+    if(first){
+      var key = 'ann_auto_' + ANN.profile.id;
+      if(n && !sessionStorage.getItem(key)){ sessionStorage.setItem(key, '1'); openAnnouncements(); return; }
+    } else if(n > ANN.lastUnread){
+      annToast('اعلان جدید دارید');
+    }
+    ANN.lastUnread = n;
+  }
+
+  function initAnnouncements(profile){
+    ANN.profile = profile;
+    var bell = q('annBellBtn'); if(bell) bell.onclick = function(){ openAnnouncements(); };
+    var send = q('annSendBtn'); if(send) send.onclick = openAnnComposer;
+    annRefresh(true);
+    if(ANN.timer) clearInterval(ANN.timer);
+    ANN.timer = setInterval(function(){ annRefresh(false); }, 60000);
+  }
+
+  async function openAnnouncements(){
+    var old = q('annOverlay'); if(old) old.remove();
+    if(!ANN.profile) return;
+    await annFetch();
+    var list = annMine();
+    var unreadIds = list.filter(function(a){ return !ANN.reads[a.id]; }).map(function(a){ return a.id; });
+    var overlay = document.createElement('div');
+    overlay.id = 'annOverlay';
+    overlay.style.cssText = ANN_OVERLAY;
+    var box = document.createElement('div');
+    box.style.cssText = ANN_BOX;
+    var cards = list.map(function(a){
+      var isNew = unreadIds.indexOf(a.id) !== -1;
+      return '<div style="border:1px solid ' + (isNew ? 'rgba(224,162,74,.7)' : 'rgba(255,255,255,.1)') + ';background:' + (isNew ? 'rgba(200,121,31,.12)' : 'rgba(255,255,255,.03)') + ';border-radius:10px;padding:12px 14px;margin-bottom:10px;">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">' +
+          '<b style="font-size:13.5px;">' + (isNew ? '<span style="color:#e0a24a">● </span>' : '') + annEsc(a.title) + '</b>' +
+          '<span style="opacity:.55;font-size:10.5px;white-space:nowrap;">' + annDate(a.created_at) + '</span></div>' +
+        (a.body ? '<div style="margin-top:8px;font-size:12.5px;line-height:1.9;white-space:pre-wrap;opacity:.9;">' + annEsc(a.body) + '</div>' : '') +
+        (a.created_by_name ? '<div style="margin-top:8px;opacity:.5;font-size:10.5px;">از طرف: ' + annEsc(a.created_by_name) + '</div>' : '') +
+        '</div>';
+    }).join('') || '<div style="opacity:.6;font-size:12.5px;">اعلانی وجود ندارد.</div>';
+    box.innerHTML = '<h3 style="margin-bottom:16px;color:#e0a24a;">🔔 اعلان‌ها</h3>' + cards +
+      '<button id="annCloseBtn" style="margin-top:8px;background:transparent;border:1px solid rgba(255,255,255,.2);color:#f2f0ea;border-radius:8px;padding:8px 14px;cursor:pointer;font-family:inherit;">بستن</button>';
+    overlay.appendChild(box);
+    overlay.addEventListener('click', function(e){ if(e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+    q('annCloseBtn').onclick = function(){ overlay.remove(); };
+    if(unreadIds.length){
+      var rows = unreadIds.map(function(id){ return { announcement_id:id, user_id:ANN.profile.id }; });
+      var res = await sb.from('announcement_reads').upsert(rows, { onConflict:'announcement_id,user_id', ignoreDuplicates:true });
+      if(!res.error){
+        unreadIds.forEach(function(id){ ANN.reads[id] = true; });
+        ANN.lastUnread = 0;
+        annUpdateBadge();
+      } else { console.error('mark read failed', res.error); }
+    }
+  }
+
+  /* ---- بخش مدیر: ارسال اعلان ---- */
+  async function openAnnComposer(){
+    var old = q('annAdminOverlay'); if(old) old.remove();
+    var pr = await sb.from('profiles').select('id,full_name,email,role,status').eq('status', 'approved').order('full_name');
+    var users = pr.data || [];
+    var overlay = document.createElement('div');
+    overlay.id = 'annAdminOverlay';
+    overlay.style.cssText = ANN_OVERLAY;
+    var box = document.createElement('div');
+    box.style.cssText = ANN_BOX;
+    var lbl = 'display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.06);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12.5px;';
+    var roleChecks = Object.keys(ANN_ROLE_FA).map(function(r){
+      return '<label style="' + lbl + '"><input type="checkbox" class="annRoleChk" value="' + r + '" style="margin:0;"><span>' + ANN_ROLE_FA[r] + '</span></label>';
+    }).join('');
+    var userRows = users.map(function(u){
+      var s = ((u.full_name || '') + ' ' + (u.email || '')).toLowerCase();
+      return '<label class="annUserRow" data-s="' + annEsc(s) + '" style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.06);font-size:12.5px;cursor:pointer;">' +
+        '<input type="checkbox" class="annUserChk" value="' + u.id + '" style="margin:0;">' +
+        '<span><b>' + annEsc(u.full_name || '(بدون نام)') + '</b> <span style="opacity:.55;font-size:11px;">' + annEsc(u.email || '') + ' · ' + (ANN_ROLE_FA[u.role] || '') + '</span></span></label>';
+    }).join('');
+    box.innerHTML =
+      '<h3 style="margin-bottom:14px;color:#e0a24a;">ارسال اعلان جدید</h3>' +
+      '<input id="annTitle" maxlength="150" placeholder="عنوان (مثلاً: بخش ماتریس PPE به‌روزرسانی شد)" style="' + ANN_INP + 'margin-bottom:10px;">' +
+      '<textarea id="annBody" rows="4" placeholder="متن اعلان (اختیاری)" style="' + ANN_INP + 'margin-bottom:14px;resize:vertical;"></textarea>' +
+      '<div style="font-size:12px;opacity:.7;margin-bottom:8px;">اعلان برای چه کسانی ارسال شود؟</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">' +
+        '<label style="' + lbl + '"><input type="radio" name="annAud" value="all" checked style="margin:0;"><span>همه کاربران</span></label>' +
+        '<label style="' + lbl + '"><input type="radio" name="annAud" value="roles" style="margin:0;"><span>بر اساس نقش</span></label>' +
+        '<label style="' + lbl + '"><input type="radio" name="annAud" value="users" style="margin:0;"><span>کاربران مشخص</span></label>' +
+      '</div>' +
+      '<div id="annRolesBox" style="display:none;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' + roleChecks + '</div>' +
+      '<div id="annUsersBox" style="display:none;margin-bottom:10px;">' +
+        '<input id="annUserSearch" placeholder="جستجوی کاربر..." style="' + ANN_INP + 'margin-bottom:6px;">' +
+        '<div id="annUserList" style="max-height:190px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:4px 8px;">' + (userRows || '<div style="opacity:.6;font-size:12px;padding:8px;">کاربر تاییدشده‌ای نیست.</div>') + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:6px;">' +
+        '<button id="annSendNow" style="background:#c8791f;color:#fff;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;font-family:inherit;font-weight:700;">ارسال</button>' +
+        '<button id="annAdminClose" style="background:transparent;border:1px solid rgba(255,255,255,.2);color:#f2f0ea;border-radius:8px;padding:8px 14px;cursor:pointer;font-family:inherit;">بستن</button>' +
+        '<span id="annMsg" style="font-size:12px;"></span>' +
+      '</div>' +
+      '<h3 style="margin:24px 0 10px;color:#e0a24a;font-size:14px;">اعلان‌های ارسال‌شده</h3><div id="annSentList"></div>';
+    overlay.appendChild(box);
+    overlay.addEventListener('click', function(e){ if(e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+    q('annAdminClose').onclick = function(){ overlay.remove(); };
+
+    function msg(text, bad){ var m = q('annMsg'); m.style.color = bad ? '#ff8a8a' : '#8fd18f'; m.textContent = text; }
+    function audVal(){ return box.querySelector('input[name="annAud"]:checked').value; }
+    Array.prototype.forEach.call(box.querySelectorAll('input[name="annAud"]'), function(r){
+      r.onchange = function(){
+        q('annRolesBox').style.display = audVal() === 'roles' ? 'flex' : 'none';
+        q('annUsersBox').style.display = audVal() === 'users' ? 'block' : 'none';
+      };
+    });
+    q('annUserSearch').oninput = function(){
+      var s = this.value.trim().toLowerCase();
+      Array.prototype.forEach.call(box.querySelectorAll('.annUserRow'), function(row){
+        row.style.display = (!s || row.getAttribute('data-s').indexOf(s) !== -1) ? 'flex' : 'none';
+      });
+    };
+    q('annSendNow').onclick = async function(){
+      var btn = this;
+      var title = q('annTitle').value.trim(), body = q('annBody').value.trim();
+      if(!title){ msg('عنوان را وارد کن.', true); return; }
+      var aud = audVal();
+      var row = { title:title, body:body, audience_all:(aud === 'all'), target_roles:[], target_user_ids:[],
+                  created_by:ANN.profile.id, created_by_name:(ANN.profile.full_name || ANN.profile.email) };
+      if(aud === 'roles'){
+        row.target_roles = Array.prototype.map.call(box.querySelectorAll('.annRoleChk:checked'), function(c){ return c.value; });
+        if(!row.target_roles.length){ msg('حداقل یک نقش را انتخاب کن.', true); return; }
+      }
+      if(aud === 'users'){
+        row.target_user_ids = Array.prototype.map.call(box.querySelectorAll('.annUserChk:checked'), function(c){ return c.value; });
+        if(!row.target_user_ids.length){ msg('حداقل یک کاربر را انتخاب کن.', true); return; }
+      }
+      btn.disabled = true;
+      var res = await sb.from('announcements').insert(row);
+      btn.disabled = false;
+      if(res.error){ msg('خطا: ' + res.error.message, true); return; }
+      q('annTitle').value = ''; q('annBody').value = '';
+      msg('اعلان ارسال شد ✓');
+      annLoadSent();
+      annRefresh(false);
+    };
+    annLoadSent();
+  }
+
+  async function annLoadSent(){
+    var el = q('annSentList'); if(!el) return;
+    var a = await sb.from('announcements').select('*').order('created_at', { ascending:false }).limit(50);
+    var r = await sb.from('announcement_reads').select('announcement_id');
+    if(a.error){ el.textContent = 'خطا: ' + a.error.message; return; }
+    var counts = {};
+    (r.data || []).forEach(function(x){ counts[x.announcement_id] = (counts[x.announcement_id] || 0) + 1; });
+    el.innerHTML = (a.data || []).map(function(x){
+      var aud = x.audience_all ? 'همه کاربران'
+        : ((x.target_roles || []).length ? 'نقش: ' + x.target_roles.map(function(k){ return ANN_ROLE_FA[k] || k; }).join('، ') : '') +
+          ((x.target_user_ids || []).length ? ((x.target_roles || []).length ? ' + ' : '') + x.target_user_ids.length + ' کاربر مشخص' : '');
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:12.5px;">' +
+        '<div><b>' + annEsc(x.title) + '</b><br><span style="opacity:.6;font-size:11px;">' + annDate(x.created_at) + ' · ' + annEsc(aud) + ' · خوانده‌شده: ' + (counts[x.id] || 0) + ' نفر</span></div>' +
+        '<button class="annDelBtn" data-id="' + x.id + '" style="background:transparent;border:1px solid rgba(255,120,120,.5);color:#ff9a9a;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit;">حذف</button></div>';
+    }).join('') || '<div style="opacity:.6;font-size:12px;">هنوز اعلانی ارسال نشده.</div>';
+    Array.prototype.forEach.call(el.querySelectorAll('.annDelBtn'), function(b){
+      b.onclick = async function(){
+        if(!confirm('این اعلان برای همه حذف شود؟')) return;
+        var d = await sb.from('announcements').delete().eq('id', b.getAttribute('data-id'));
+        if(d.error){ alert('خطا: ' + d.error.message); return; }
+        annLoadSent(); annRefresh(false);
+      };
+    });
+  }
+
 
   checkSession();
 })();
@@ -1051,6 +1278,8 @@
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 function toEn(s){
@@ -1090,7 +1319,8 @@ async function fetchSheet(name){
       return data || [];
     }catch(e){ console.error('Supabase Risk fetch failed', e); return []; }
   }
-  return [];
+  try{ const res = await fetch(GSHEETS_URL + '?sheet=' + name + '&token=' + GSHEETS_TOKEN + '&_=' + Date.now(), {cache:'no-store'}); const rows = await res.json(); return Array.isArray(rows)?rows:[]; }
+  catch(e){ console.error('fetch failed', name, e); return []; }
 }
 
 async function loadAll(){
@@ -1502,6 +1732,8 @@ init();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 function toEn(s){
@@ -1620,7 +1852,8 @@ async function fetchSheet(name){
       }
     }catch(e){ console.error('Supabase fetch failed', name, e); return []; }
   }
-  return [];
+  try{ const res = await fetch(GSHEETS_URL + '?sheet=' + name + '&token=' + GSHEETS_TOKEN + '&_=' + Date.now(), {cache:'no-store'}); const rows = await res.json(); return Array.isArray(rows) ? rows : []; }
+  catch(e){ console.error('fetch failed', name, e); return []; }
 }
 
 function getPersonnelSb(){
@@ -2210,6 +2443,10 @@ table.eqtbl td{padding:8px 12px;border-bottom:1px solid var(--border);text-align
       <input type="text" class="finput" id="pSrch" placeholder="نام پرسنل...">
       <span class="flabel">واحد:</span>
       <select class="finput" id="pDept"><option value="">همه واحدها</option></select>
+      <span class="flabel">سال:</span>
+      <select class="finput" id="pYear"></select>
+      <span class="flabel">ماه:</span>
+      <select class="finput" id="pMonth"></select>
       <div class="spacer"></div>
       <button class="btn" id="btnAddQuota">+ افزودن پرسنل جدید</button>
     </div>
@@ -2304,6 +2541,8 @@ table.eqtbl td{padding:8px 12px;border-bottom:1px solid var(--border);text-align
 
 <script type="application/json" id="ppeIssuedBootstrap">[]</script>
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let PPE_PERSONS = [];   // {name, unit, job} — entered in Google Sheet "PPEPersons"
 let MATRIX = [];        // {group, item, job, frequency} — sheet "PPEMatrix"
 let PPE_QUOTA = [];     // derived automatically: for every person, the matrix items matching their job
@@ -2624,20 +2863,28 @@ async function savePersons(){
     }
   }catch(e){ console.error('PPEPersons save failed', e); }
 }
+function ppeIssuedRow(r){
+  return { name:r.name||'', unit:r.unit||'', equipment:r.equipment||'', issue_date:r.date||'', qty:r.qty, is_surplus: !!r.isSurplus, reason:r.reason||'', approved_by:r.approvedBy||'' };
+}
 async function saveIssued(){
   try{
     const sb = getPpeSb();
     const { data: existing } = await sb.from('ppeissued').select('legacy_key');
     const existingKeys = new Set((existing||[]).map(r=>r.legacy_key));
     const currentKeys = new Set(PPE_ISSUED.map(r=>''+r.id));
+    window.__ppeIssuedSnap = window.__ppeIssuedSnap || {};
+    const snap = window.__ppeIssuedSnap;
     for(const k of existingKeys){
-      if(!currentKeys.has(k)){ await sb.from('ppeissued').delete().eq('legacy_key', k); }
+      if(!currentKeys.has(k)){ await sb.from('ppeissued').delete().eq('legacy_key', k); delete snap[k]; }
     }
     for(const r of PPE_ISSUED){
       const key = ''+r.id;
-      const row = { name:r.name||'', unit:r.unit||'', equipment:r.equipment||'', issue_date:r.date||'', qty:r.qty, is_surplus: !!r.isSurplus, reason:r.reason||'', approved_by:r.approvedBy||'' };
+      const row = ppeIssuedRow(r);
+      const sig = JSON.stringify(row);
+      if(existingKeys.has(key) && snap[key]===sig) continue;
       if(existingKeys.has(key)){ await sb.from('ppeissued').update(row).eq('legacy_key', key); }
       else{ await sb.from('ppeissued').insert({ ...row, legacy_key: key }); }
+      snap[key] = sig;
     }
   }catch(e){ console.error('PPEIssued save failed', e); }
 }
@@ -2649,7 +2896,7 @@ function rebuildQuotaFromMatrix(){
   PPE_PERSONS.forEach(p=>{
     const items = MATRIX.filter(m=>m.job===p.job);
     items.forEach(m=>{
-      PPE_QUOTA.push({ name:p.name, unit:p.unit, job:p.job, equipment:m.item, group:m.group });
+      PPE_QUOTA.push({ name:p.name, unit:p.unit, job:p.job, equipment:m.item, group:m.group, frequency:m.frequency||'' });
     });
   });
 }
@@ -2677,9 +2924,79 @@ async function loadAll(){
   rebuildQuotaFromMatrix();
 
   let iss = await sheetGet('PPEIssued');
-  if(!iss || !iss.length){ iss = JSON.parse(document.getElementById('ppeIssuedBootstrap').textContent); }
+  const issFromDb = !!(iss && iss.length);
+  if(!issFromDb){ iss = JSON.parse(document.getElementById('ppeIssuedBootstrap').textContent); }
   PPE_ISSUED = iss.map(r=>({ id:r.id||(''+Date.now()+Math.random()), code:r.code||'', name:r.name||'', unit:r.unit||'',
     equipment:r.equipment||'', date:r.date||'', qty:r.qty||1, isSurplus:normBool(r.isSurplus), reason:r.reason||'', approvedBy:r.approvedBy||'' }));
+  window.__ppeIssuedSnap = {};
+  if(issFromDb){ PPE_ISSUED.forEach(r=>{ window.__ppeIssuedSnap[''+r.id] = JSON.stringify(ppeIssuedRow(r)); }); }
+}
+
+/* ================= سهمیه سالانه + تاریخ تحویل (شمسی) ================= */
+const PPE_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+function ppeToFa(n){ return String(n).replace(/\d/g, d=>'۰۱۲۳۴۵۶۷۸۹'[d]); }
+function ppeDigits(s){
+  return String(s==null?'':s).replace(/[۰-۹]/g, d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/[٠-٩]/g, d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+function ppeDateYM(s){
+  const m = ppeDigits(s).trim().match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})/);
+  return m ? { y:parseInt(m[1],10), m:parseInt(m[2],10) } : null;
+}
+function ppeNormDate(s){
+  const m = ppeDigits(s).trim().replace(/[\-.]/g,'/').match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if(!m) return null;
+  const y=+m[1], mo=+m[2], d=+m[3];
+  if(mo<1 || mo>12 || d<1 || d>31) return null;
+  return y+'/'+String(mo).padStart(2,'0')+'/'+String(d).padStart(2,'0');
+}
+function ppeTodayJ(){
+  const now = new Date(); const y = now.getFullYear();
+  let jy, start;
+  if(now >= new Date(y,2,21)){ jy=y-621; start=new Date(y,2,21); } else { jy=y-622; start=new Date(y-1,2,21); }
+  let rem = Math.floor((new Date(now.getFullYear(),now.getMonth(),now.getDate()) - start)/86400000);
+  const ml=[31,31,31,31,31,31,30,30,30,30,30,29]; let jm=12;
+  for(let i=0;i<12;i++){ if(rem<ml[i]){ jm=i+1; break; } rem-=ml[i]; }
+  return jy+'/'+String(jm).padStart(2,'0')+'/'+String(rem+1).padStart(2,'0');
+}
+// دوره تعویض (متن) -> تعداد ماه؛ مثال: «۶ ماهه»=6، «سالانه»=12، «دو سال یکبار»=24
+function ppeFreqMonths(f){
+  let s = ppeDigits(f).trim().replace(/ي/g,'ی').replace(/ك/g,'ک');
+  if(!s) return null;
+  if(/دو\s*سال/.test(s)) return 24;
+  if(/سه\s*سال/.test(s)) return 36;
+  let m = s.match(/(\d+)\s*سال/); if(m) return parseInt(m[1],10)*12;
+  m = s.match(/(\d+)\s*ماه/); if(m) return parseInt(m[1],10);
+  if(/شش\s*ماه/.test(s)) return 6;
+  if(/سه\s*ماه/.test(s)) return 3;
+  if(/چهار\s*ماه/.test(s)) return 4;
+  if(/ماهانه|هر\s*ماه/.test(s)) return 1;
+  if(/سالانه|سالیانه|یک\s*سال|یکساله/.test(s)) return 12;
+  return null;
+}
+function ppeFreqLabel(fm, raw){
+  if(fm===null) return raw ? raw : 'دوره تعریف نشده';
+  if(fm<12) return 'هر '+ppeToFa(fm)+' ماه';
+  if(fm===12) return 'سالانه';
+  return 'هر '+ppeToFa(fm/12)+' سال';
+}
+function ppePeriod(){
+  const y = parseInt(ppeDigits(document.getElementById('pYear').value||''),10) || ppeCurrentYM().year;
+  const m = parseInt(document.getElementById('pMonth').value||'',10) || 0;
+  return { y, m };
+}
+function ppeInitPeriodFilters(){
+  const ys = document.getElementById('pYear'), ms = document.getElementById('pMonth');
+  const prevY = ys.value, prevM = ms.value;
+  const cur = ppeCurrentYM().year;
+  const set = new Set([cur, cur-1]);
+  PPE_ISSUED.forEach(r=>{ const d = ppeDateYM(r.date); if(d) set.add(d.y); });
+  const years = Array.from(set).sort((a,b)=>b-a);
+  ys.innerHTML = years.map(y=>`<option value="${y}">${ppeToFa(y)}</option>`).join('');
+  ys.value = (prevY && years.indexOf(parseInt(prevY,10))>-1) ? prevY : String(cur);
+  ms.innerHTML = '<option value="">همه ماه‌ها</option>' + PPE_MONTHS.map((n,i)=>`<option value="${i+1}">${n}</option>`).join('');
+  ms.value = prevM || '';
+  ys.onchange = filterAndRenderPersons;
+  ms.onchange = filterAndRenderPersons;
 }
 
 /* ================= BY PERSON TAB ================= */
@@ -2726,6 +3043,7 @@ function renderPersonTab(){
   `;
 
   window.__personsData = persons;
+  ppeInitPeriodFilters();
   filterAndRenderPersons();
   document.getElementById('pSrch').oninput = filterAndRenderPersons;
   document.getElementById('pDept').onchange = filterAndRenderPersons;
@@ -2734,8 +3052,11 @@ function renderPersonTab(){
 function filterAndRenderPersons(){
   const q = (document.getElementById('pSrch').value||'').trim();
   const dept = document.getElementById('pDept').value;
+  const per = ppePeriod();
+  const monthName = per.m ? PPE_MONTHS[per.m-1] : '';
   const persons = window.__personsData || {};
   const container = document.getElementById('personList');
+  const openKeys = new Set(Array.from(container.querySelectorAll('.person-card.open')).map(c=>c.getAttribute('data-key')));
   const keys = Object.keys(persons).filter(k=>{
     const p = persons[k];
     if(dept && p.unit!==dept) return false;
@@ -2743,27 +3064,74 @@ function filterAndRenderPersons(){
     return true;
   });
   if(!keys.length){ container.innerHTML = '<div class="empty-note">پرسنلی یافت نشد — از دکمه «افزودن پرسنل جدید» شروع کن، یا نام/واحد/شغل را در شیت PPEPersons وارد کن.</div>'; return; }
+  const KIND = { ok:'background:#e6f4ea;color:#1e7e34', warn:'background:#fff4e0;color:#a56200', bad:'background:#fdecea;color:#b71c1c', gray:'background:#eef0f3;color:#5A6478' };
   container.innerHTML = keys.map(key=>{
     const p = persons[key];
     const surplusItems = PPE_ISSUED.filter(r=>r.name===p.name && r.unit===p.unit && r.isSurplus);
     const jobNote = p.job ? esc(p.job) : '<span style="color:var(--bad)">شغل ثبت نشده</span>';
+    let totalEnt = 0, totalDone = 0, monthCount = 0;
+    const rowsHtml = p.quota.map(qi=>{
+      const dels = PPE_ISSUED.filter(r=>r.name===p.name && r.unit===p.unit && r.equipment===qi.equipment && !r.isSurplus)
+        .map(r=>({ r, d:ppeDateYM(r.date) }));
+      const fm = ppeFreqMonths(qi.frequency);
+      const inYear = dels.filter(x=>x.d && x.d.y===per.y);
+      const inMonth = per.m ? inYear.filter(x=>x.d.m===per.m) : inYear;
+      let ent = null, done = 0, annualTxt = '—', badgeTxt = '', kind = 'gray';
+      if(fm===null){
+        badgeTxt = inYear.length ? (ppeToFa(inYear.length)+' تحویل') : 'تحویل نشده';
+        kind = inYear.length ? 'ok' : 'gray';
+      } else if(fm<=12){
+        ent = Math.max(1, Math.round(12/fm));
+        done = Math.min(inYear.length, ent);
+        annualTxt = ppeToFa(ent)+' بار در سال';
+        badgeTxt = ppeToFa(inYear.length)+' از '+ppeToFa(ent);
+        kind = inYear.length>=ent ? 'ok' : (inYear.length ? 'warn' : 'bad');
+      } else {
+        const yrs = fm/12;
+        annualTxt = '۱ بار در '+ppeToFa(yrs)+' سال';
+        if(inYear.length){ ent = 1; done = 1; badgeTxt = 'تحویل‌شده'; kind = 'ok'; }
+        else {
+          const prior = dels.filter(x=>x.d && x.d.y>per.y-yrs && x.d.y<per.y);
+          if(prior.length){
+            ent = 0;
+            const ly = Math.max.apply(null, prior.map(x=>x.d.y));
+            badgeTxt = 'نوبت بعدی: '+ppeToFa(ly+yrs); kind = 'gray';
+          } else { ent = 1; badgeTxt = 'نوبت این سال — تحویل نشده'; kind = 'bad'; }
+        }
+      }
+      if(ent!==null){ totalEnt += ent; totalDone += done; }
+      if(per.m){
+        const n = inMonth.length;
+        monthCount += n;
+        badgeTxt = n ? (ppeToFa(n)+' تحویل در '+monthName) : ('تحویل نشده در '+monthName);
+        kind = n ? 'ok' : 'gray';
+      }
+      const shown = dels.filter(x=>!x.d || (x.d.y===per.y && (!per.m || x.d.m===per.m)))
+        .sort((a,b)=>String(ppeDigits(a.r.date)).localeCompare(String(ppeDigits(b.r.date))));
+      const chips = shown.map(x=>`<span style="display:inline-flex;align-items:center;gap:4px">
+          <input type="text" class="q-date" data-id="${esc(x.r.id)}" value="${esc(x.r.date)}" style="width:96px;border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:11.5px;font-family:inherit">
+          <button class="icon-btn danger q-del" data-id="${esc(x.r.id)}" title="حذف این تحویل">✕</button></span>`).join('');
+      return `<div class="quota-row" style="flex-wrap:wrap">
+        <div class="quota-eq">${esc(qi.equipment)}<div style="font-size:11px;color:var(--muted);font-weight:500;margin-top:2px">${esc(ppeFreqLabel(fm, qi.frequency))} · سهمیه سالانه: ${annualTxt}</div></div>
+        <span class="summary-tag" style="${KIND[kind]}">${badgeTxt}</span>
+        <div style="width:100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-top:4px">
+          ${chips}
+          <input type="text" class="q-new" placeholder="تاریخ تحویل (۱۴۰۵/۰۷/۱۰)" style="width:165px;border:1px solid var(--border);border-radius:6px;padding:4px 7px;font-size:11.5px;font-family:inherit">
+          <button class="btn ghost q-add" data-name="${esc(p.name)}" data-unit="${esc(p.unit)}" data-equip="${esc(qi.equipment)}">+ ثبت تحویل</button>
+        </div>
+      </div>`;
+    }).join('') || '<div style="font-size:12px;color:var(--muted)">برای این شغل موردی در ماتریس حفاظت فردی تعریف نشده.</div>';
+    const periodMeta = ` | سهمیه سال ${ppeToFa(per.y)}: ${ppeToFa(totalEnt)} نوبت | تحویل‌شده: ${ppeToFa(totalDone)}` + (per.m ? ` | تحویل در ${monthName}: ${ppeToFa(monthCount)}` : '');
     return `<div class="person-card" data-key="${esc(key)}">
       <div class="person-head">
-        <div><div class="person-name">${esc(p.name)}</div><div class="person-meta">${esc(p.unit||'—')} | شغل: ${jobNote} | ${p.quota.length} قلم سهمیه${(PERSONNEL_MAP[p.name]&&PERSONNEL_MAP[p.name].age!=null)?` | سن: ${PERSONNEL_MAP[p.name].age}`:''}${(PERSONNEL_MAP[p.name]&&PERSONNEL_MAP[p.name].tenure!=null)?` | سابقه: ${PERSONNEL_MAP[p.name].tenure} سال`:''}</div></div>
+        <div><div class="person-name">${esc(p.name)}</div><div class="person-meta">${esc(p.unit||'—')} | شغل: ${jobNote} | ${p.quota.length} قلم سهمیه${periodMeta}${(PERSONNEL_MAP[p.name]&&PERSONNEL_MAP[p.name].age!=null)?` | سن: ${PERSONNEL_MAP[p.name].age}`:''}${(PERSONNEL_MAP[p.name]&&PERSONNEL_MAP[p.name].tenure!=null)?` | سابقه: ${PERSONNEL_MAP[p.name].tenure} سال`:''}</div></div>
         <div style="display:flex;align-items:center;gap:10px">
           <button class="icon-btn danger" onclick="event.stopPropagation();removePerson('${esc(p.name)}','${esc(p.unit)}')">حذف پرسنل</button>
           <span class="chev">▾</span>
         </div>
       </div>
       <div class="person-body"><div class="person-body-inner">
-        ${p.quota.length ? p.quota.map(qi=>{
-          const issued = PPE_ISSUED.find(r=>r.name===p.name && r.unit===p.unit && r.equipment===qi.equipment && !r.isSurplus);
-          return `<div class="quota-row">
-            <input type="checkbox" class="q-check" data-name="${esc(p.name)}" data-unit="${esc(p.unit)}" data-equip="${esc(qi.equipment)}" ${issued?'checked':''}>
-            <div class="quota-eq">${esc(qi.equipment)}</div>
-            <div class="quota-date">${issued? `<input type="text" class="q-date" data-name="${esc(p.name)}" data-unit="${esc(p.unit)}" data-equip="${esc(qi.equipment)}" value="${esc(issued.date)}">` : '—'}</div>
-          </div>`;
-        }).join('') : '<div style="font-size:12px;color:var(--muted)">برای این شغل موردی در ماتریس حفاظت فردی تعریف نشده.</div>'}
+        ${rowsHtml}
         <div class="surplus-box">
           <div class="surplus-title">مازاد بر سهمیه</div>
           ${surplusItems.length ? surplusItems.map(s=>`
@@ -2778,26 +3146,49 @@ function filterAndRenderPersons(){
     </div>`;
   }).join('');
 
+  container.querySelectorAll('.person-card').forEach(c=>{ if(openKeys.has(c.getAttribute('data-key'))) c.classList.add('open'); });
   container.querySelectorAll('.person-head').forEach(h=> h.addEventListener('click', ()=> h.closest('.person-card').classList.toggle('open')));
-  container.querySelectorAll('.q-check').forEach(chk=>{
-    chk.addEventListener('change', async ()=>{
-      const name=chk.dataset.name, unit=chk.dataset.unit, equip=chk.dataset.equip;
-      if(chk.checked){
-        PPE_ISSUED.push({ id:''+Date.now()+Math.random(), code:'', name, unit, equipment:equip, date:todayStr(), qty:1, isSurplus:false, reason:'', approvedBy:'' });
-      } else {
-        const idx = PPE_ISSUED.findIndex(r=>r.name===name && r.unit===unit && r.equipment===equip && !r.isSurplus);
-        if(idx>-1) PPE_ISSUED.splice(idx,1);
-      }
+
+  const refreshAll = ()=>{ ppeInitPeriodFilters(); filterAndRenderPersons(); renderSummaryTab(); };
+
+  container.querySelectorAll('.q-add').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const inp = btn.parentElement.querySelector('.q-new');
+      const raw = (inp.value||'').trim();
+      const date = raw ? ppeNormDate(raw) : ppeTodayJ();
+      if(!date){ alert('تاریخ را به شکل ۱۴۰۵/۰۷/۱۰ وارد کن (سال/ماه/روز).'); return; }
+      btn.disabled = true;
+      PPE_ISSUED.push({ id:''+Date.now()+Math.random(), code:'', name:btn.dataset.name, unit:btn.dataset.unit, equipment:btn.dataset.equip, date, qty:1, isSurplus:false, reason:'', approvedBy:'' });
       await saveIssued();
+      ppeInitPeriodFilters();
+      const d = ppeDateYM(date);
+      if(d){
+        document.getElementById('pYear').value = String(d.y);
+        const msel = document.getElementById('pMonth');
+        if(msel.value && parseInt(msel.value,10)!==d.m) msel.value = '';
+      }
       filterAndRenderPersons();
       renderSummaryTab();
     });
   });
   container.querySelectorAll('.q-date').forEach(inp=>{
-    inp.addEventListener('blur', async ()=>{
-      const name=inp.dataset.name, unit=inp.dataset.unit, equip=inp.dataset.equip;
-      const rec = PPE_ISSUED.find(r=>r.name===name && r.unit===unit && r.equipment===equip && !r.isSurplus);
-      if(rec){ rec.date = inp.value.trim(); await saveIssued(); }
+    inp.addEventListener('change', async ()=>{
+      const rec = PPE_ISSUED.find(r=>''+r.id===inp.dataset.id);
+      if(!rec) return;
+      const nd = ppeNormDate(inp.value);
+      if(!nd){ alert('تاریخ را به شکل ۱۴۰۵/۰۷/۱۰ وارد کن (سال/ماه/روز).'); inp.value = rec.date; return; }
+      rec.date = nd;
+      await saveIssued();
+      refreshAll();
+    });
+  });
+  container.querySelectorAll('.q-del').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!confirm('این تحویل حذف شود؟')) return;
+      const idx = PPE_ISSUED.findIndex(r=>''+r.id===btn.dataset.id);
+      if(idx>-1) PPE_ISSUED.splice(idx,1);
+      await saveIssued();
+      refreshAll();
     });
   });
 }
@@ -3308,6 +3699,8 @@ table.atbl input[type=checkbox]{width:18px;height:18px;cursor:pointer}
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let ANOMALIES = [];
 
 function esc(s){
@@ -3796,6 +4189,8 @@ table.atbl tr:hover td{background:var(--gray-050)}
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let INCIDENTS = [];
 
 function esc(s){
@@ -4231,6 +4626,8 @@ table.rtbl tbody tr:hover{background:var(--gray-050)}
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 function esc(s){ var a=String.fromCharCode(38); return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 
 // ---------- ماتریس ریسک (طبق راهنمای ارزیابی ریسک‌های ایمنی) ----------
@@ -4709,6 +5106,8 @@ table.rtbl tbody tr:hover{background:var(--gray-050)}
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 function esc(s){ var a=String.fromCharCode(38); return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 
 // ---------- عدد جنبه = شدت(۱ تا ۱۰) × احتمال(۱ تا ۱۰) — طبق راهنمای ارزیابی جنبه‌های زیست‌محیطی ----------
@@ -5175,6 +5574,8 @@ table.rtbl tbody tr:hover{background:var(--gray-050)}
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 function esc(s){ var a=String.fromCharCode(38); return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 function toEn(s){
   if(s===undefined||s===null) return '';
@@ -6023,6 +6424,8 @@ function showAgentDetail(agent){
 document.getElementById('agentSearch').addEventListener('input', e=> renderAgentList(e.target.value));
 
 
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let CORRECTIVE = [];
 function __correctiveId(r){ return (r.dept||'')+'|'+(r.job||'')+'|'+(r.agent||'')+'|'+(r.value||''); }
 async function __loadCorrective(){
@@ -6237,6 +6640,8 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 });
 
 // ---------- standard parsing ----------
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 function __rowsToWater(rows){
   const byDataset = {};
   rows.forEach(r=>{
@@ -6655,6 +7060,7 @@ __initWaterApp();
       <div class="field"><label>تاریخ</label><input type="text" id="f-date" placeholder="۱۴۰۳/۰۵/۱۲"></div>
       <div class="field"><label>ساعت</label><input type="text" id="f-time" placeholder="۰۸:۳۰"></div>
       <div class="field wide"><label>محل نمونه‌برداری</label><input type="text" id="f-loc" placeholder="مثلاً مخزن اصلی، شیر آخر خط..."></div>
+      <div class="field wide"><label>محل تخلیه</label><input type="text" id="f-discharge" placeholder="مثلاً مخزن ۲، شبکه توزیع..."></div>
       <div class="field"><label>حجم مخزن (لیتر)</label><input type="text" id="f-vol" placeholder="مثلاً ۵۰۰۰"></div>
       <div class="field"><label>میزان کلر اضافه‌شده (گرم)</label><input type="text" id="f-added" placeholder="مثلاً ۲۰۰"></div>
       <div class="field"><label>میزان کلر باقیمانده (ppm)</label><input type="text" id="f-residual" placeholder="مثلاً ۰.۵"></div>
@@ -6671,7 +7077,7 @@ __initWaterApp();
     <div id="tableWrap" class="hidden" style="overflow:auto">
       <table class="ctbl">
         <thead><tr>
-          <th>تاریخ</th><th>ساعت</th><th>محل نمونه‌برداری</th><th>حجم مخزن (لیتر)</th><th>کلر اضافه‌شده (گرم)</th><th>کلر باقیمانده (ppm)</th><th>مسئول کلرسنجی</th><th></th>
+          <th>تاریخ</th><th>ساعت</th><th>محل نمونه‌برداری</th><th>محل تخلیه</th><th>حجم مخزن (لیتر)</th><th>کلر اضافه‌شده (گرم)</th><th>کلر باقیمانده (ppm)</th><th>مسئول کلرسنجی</th><th></th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table>
@@ -6681,6 +7087,8 @@ __initWaterApp();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 
@@ -6691,6 +7099,7 @@ function rowToRec(r){
     date: r['date']||r['تاریخ']||'',
     time: r['time']||r['ساعت']||'',
     location: r['location']||r['محل نمونه برداری']||'',
+    discharge: r['discharge_location']||r['discharge']||r['محل تخلیه']||'',
     volume: r['volume']||r['حجم مخزن']||'',
     added: r['added']||r['کلر اضافه شده']||'',
     residual: r['residual']||r['کلر باقیمانده']||'',
@@ -6698,7 +7107,7 @@ function rowToRec(r){
   };
 }
 function recToRow(r){
-  return { date:r.date, time:r.time, location:r.location, volume:r.volume, added:r.added, residual:r.residual, person:r.person };
+  return { date:r.date, time:r.time, location:r.location, discharge_location:r.discharge, volume:r.volume, added:r.added, residual:r.residual, person:r.person };
 }
 
 async function sheetGet(name){
@@ -6734,6 +7143,7 @@ function render(){
     <td>${esc(r.date)}</td>
     <td>${esc(r.time)}</td>
     <td>${esc(r.location)}</td>
+    <td>${esc(r.discharge)}</td>
     <td>${esc(r.volume)}</td>
     <td>${esc(r.added)}</td>
     <td>${esc(r.residual)}</td>
@@ -6755,6 +7165,7 @@ document.getElementById('addBtn').addEventListener('click', async ()=>{
     date: document.getElementById('f-date').value.trim(),
     time: document.getElementById('f-time').value.trim(),
     location: document.getElementById('f-loc').value.trim(),
+    discharge: document.getElementById('f-discharge').value.trim(),
     volume: document.getElementById('f-vol').value.trim(),
     added: document.getElementById('f-added').value.trim(),
     residual: document.getElementById('f-residual').value.trim(),
@@ -6766,7 +7177,7 @@ document.getElementById('addBtn').addEventListener('click', async ()=>{
   }
   CHLORINE.push(rec);
   render();
-  ['f-date','f-time','f-loc','f-vol','f-added','f-residual','f-person'].forEach(id=>{ document.getElementById(id).value=''; });
+  ['f-date','f-time','f-loc','f-discharge','f-vol','f-added','f-residual','f-person'].forEach(id=>{ document.getElementById(id).value=''; });
   await sheetSet('ChlorineTests', CHLORINE.map(recToRow));
 });
 
@@ -6951,6 +7362,8 @@ init();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 
@@ -7404,6 +7817,8 @@ loadSummary();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 
@@ -7621,6 +8036,8 @@ init();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 function esc(s){ var a=String.fromCharCode(38); return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, c=>({'&':a+'amp;','<':a+'lt;','>':a+'gt;','"':a+'quot;',"'":a+'#39;'}[c])); }
 function toEn(s){ const fa='۰۱۲۳۴۵۶۷۸۹', ar='٠١٢٣٤٥٦٧٨٩'; return String(s||'').replace(/[۰-۹٠-٩]/g, ch=>{ let i=fa.indexOf(ch); if(i>-1) return i; i=ar.indexOf(ch); if(i>-1) return i; return ch; }); }
@@ -8379,6 +8796,8 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 let MED = []
 let PERSONNEL_MAP = {};
 
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 function __rowToMed(r){
   return {
     code: (r.code!==undefined && r.code!=="") ? r.code : null,
@@ -10374,6 +10793,8 @@ init();
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let DATA = [];
 let MONTH_ORDER = [];
 
@@ -11011,6 +11432,8 @@ table.eqtbl td{padding:8px 12px;border-bottom:1px solid var(--border);text-align
 window.__costsBootError = null;
 try {
 
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 const PERSIAN_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
 let COSTS = [];
 
@@ -11508,6 +11931,8 @@ table.eqtbl td{padding:8px 12px;border-bottom:1px solid var(--border);text-align
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 let DOCS = [];
 let activeCat = '';
 
@@ -11924,6 +12349,8 @@ table.eqtbl td{padding:8px 12px;border-bottom:1px solid var(--border);text-align
 </div>
 
 <script>
+const GSHEETS_URL = "https://script.google.com/macros/s/AKfycbyFR3x2Fcj87CEXn909sVA384Mx44wieqqyezeMRVtCSnp8GVcge9uAuZJp_DvC5lP_/exec";
+const GSHEETS_TOKEN = "oe39-gawP_7yWjt_H3Srpg5TnJtlo1x1bUrA0AWerbo";
 
 let TR_PERSONS = [];   // {name, unit, job} — entered in Google Sheet "TrainingPersons"
 let TR_MATRIX = [];    // {group, item, job, frequency} — sheet "TrainingMatrix"
