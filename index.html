@@ -334,12 +334,18 @@ function applyFontToSrc(src){
   .ub-menu button:hover{ background:rgba(255,255,255,.08); }
   .ub-menu .ub-out{ color:#e0a24a; margin-top:4px; border-top:1px solid rgba(255,255,255,.1); border-radius:0 0 8px 8px; }
   .ub-s{ position:relative; }
-  #ubSearch{ display:none; }
-  body:has(#home:not([style*="display: none"]):not([style*="display:none"])) #ubSearch{ display:flex; }
-  .ub-sbox{ display:none; position:absolute; top:calc(100% + 8px); left:0; width:260px; padding:8px; background:#1c1f22; border:1px solid rgba(200,121,31,.4); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,.5); }
+  #ubSearch{ display:flex; }
+  .ub-sbox{ display:none; position:fixed; top:68px; right:16px; left:auto; width:min(380px, calc(100vw - 32px)); padding:8px; background:#1c1f22; border:1px solid rgba(200,121,31,.4); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,.5); }
   .ub-sbox.open{ display:block; }
   .ub-sbox input{ width:100%; padding:9px 14px; border-radius:20px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.06); color:#fff; font-family:inherit; font-size:12.5px; outline:none; }
   .ub-sbox input:focus{ border-color:rgba(224,162,74,.7); }
+  .ub-res{ margin-top:8px; max-height:calc(100vh - 160px); overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+  .ub-res:empty{ display:none; }
+  .ub-r{ text-align:right; background:rgba(255,255,255,.05); border:0; border-radius:8px; color:#f2f0ea; padding:8px 10px; cursor:pointer; font-family:inherit; font-size:12.5px; line-height:1.7; }
+  .ub-r:hover{ background:rgba(255,255,255,.14); }
+  .ub-r small{ display:block; color:#b9b4a8; font-size:11px; font-weight:400; }
+  .ub-r mark{ background:#e0a24a; color:#1c1f22; border-radius:3px; padding:0 2px; }
+  .ub-none{ color:#b9b4a8; font-size:12px; padding:8px 4px; text-align:center; }
   .hero{ padding-top:56px; }
   .hero-logo{ display:block; width:min(240px,66vw); height:auto; margin:0 auto 20px; filter:drop-shadow(0 4px 14px rgba(0,0,0,.4)); }
   .hero h1{ font-size:26px; line-height:1.5; }
@@ -546,7 +552,7 @@ function applyFontToSrc(src){
         (isA ? '<button id="adminPanelBtn2">مدیریت کاربران</button><button id="loginLogBtn">لیست ورودها</button><button id="annSendBtn">ارسال اعلان</button>' : '') +
         '<button id="agLogoutBtn" class="ub-out">خروج</button></div></div>' +
       '<button id="annBellBtn" class="ub-bell" title="اعلان‌ها"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a1.9 1.9 0 0 0 3.4 0"/></svg><span id="annBadge" class="ub-badge" style="display:none">0</span></button>' +
-      '<div class="ub-s"><button id="ubSearch" class="ub-bell" type="button" title="جستجو"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button><div id="ubSBox" class="ub-sbox"><input id="homeSearch" placeholder="جستجو در سامانه ..." autocomplete="off"></div></div>';
+      '<div class="ub-s"><button id="ubSearch" class="ub-bell" type="button" title="جستجو"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button><div id="ubSBox" class="ub-sbox"><input id="homeSearch" placeholder="جستجو در سامانه ..." autocomplete="off"><div id="ubResults" class="ub-res"></div></div></div>';
     var closeS = function(){
       var bx = bar.querySelector('#ubSBox'), inp = bar.querySelector('#homeSearch');
       if(bx.classList.contains('open')){ bx.classList.remove('open'); if(inp.value){ inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles:true })); } }
@@ -1227,13 +1233,104 @@ function applyFontToSrc(src){
 
 
 <script>
-document.addEventListener('input',function(ev){
-  if(!ev.target || ev.target.id!=='homeSearch') return;
-  var v=ev.target.value.trim();
-  document.querySelectorAll('#home .card, #home .mini-card').forEach(function(el){
-    el.style.display=(!v || el.textContent.indexOf(v)>-1) ? '' : 'none';
+/* ===== جستجوی سراسری سامانه: عنوان و توضیح کارت‌ها + متن داخل همه‌ی بخش‌ها ===== */
+(function(){
+  var IDX = null, TIMER = null;
+  function norm(s){
+    return String(s||'').replace(/[\u064B-\u065F\u0670\u0640]/g,'').replace(/ي/g,'ی').replace(/ك/g,'ک')
+      .replace(/[أإآٱ]/g,'ا').replace(/ؤ/g,'و').replace(/ة/g,'ه').replace(/[\u200c\u200f]/g,' ')
+      .replace(/[۰-۹]/g,function(d){ return '۰۱۲۳۴۵۶۷۸۹'.indexOf(d); })
+      .replace(/[٠-٩]/g,function(d){ return '٠١٢٣٤٥٦٧٨٩'.indexOf(d); })
+      .replace(/\s+/g,' ').trim().toLowerCase();
+  }
+  function esc(s){ return String(s==null?'':s).replace(/[<>"]/g,function(c){ return c==='<'?'&lt;':(c==='>'?'&gt;':'&quot;'); }); }
+  function texts(src){
+    var s = src.replace(/data:[a-z\/+\-]+;base64,[A-Za-z0-9+\/=]+/g,' ').replace(/<style[\s\S]*?<\/style>/g,' ').replace(/\/\*[\s\S]*?\*\//g,' ');
+    var re = /[\u0600-\u06FF][\u0600-\u06FF0-9\u200c\s\/\-\(\)،:.؟!«»A-Za-z]{2,}/g, out = [], seen = {}, m;
+    while((m = re.exec(s))){ var t = m[0].replace(/\s+/g,' ').trim(); if(t.length < 3 || seen[t]) continue; seen[t] = 1; out.push({raw:t, n:norm(t)}); }
+    return out;
+  }
+  function build(){
+    var items = [], seen = {};
+    document.querySelectorAll('.card[onclick], .mini-card[onclick]').forEach(function(el){
+      var m = (el.getAttribute('onclick')||'').match(/^open(App|Category)\('([^']+)'\)/); if(!m) return;
+      var key = m[1]+':'+m[2]; if(seen[key]) return; seen[key] = 1;
+      var t = el.querySelector('h2,h3'), p = el.querySelector('p'), menu = el.closest('[id$="Menu"]'), h1 = menu ? menu.querySelector('h1') : null;
+      var it = { kind:m[1], name:m[2], title:(t?t.textContent:'').replace(/\s+/g,' ').trim(), desc:(p?p.textContent:'').replace(/\s+/g,' ').trim(), area:h1 ? h1.textContent.trim() : 'صفحه اصلی', body:[] };
+      it.nt = norm(it.title); it.nd = norm(it.desc); it.na = norm(it.area);
+      items.push(it);
+    });
+    items.forEach(function(it){
+      if(it.kind !== 'App') return;
+      var ta = document.getElementById('src-'+it.name); if(!ta) return;
+      try{ it.body = texts(ta.value); }catch(e){ it.body = []; }
+    });
+    return items;
+  }
+  function hl(text, toks){
+    var n = norm(text), out = esc(text);
+    toks.forEach(function(t){
+      if(!t) return; var i = n.indexOf(t); if(i < 0 || n.length !== text.length) return;
+      out = out.replace(new RegExp('('+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','i'), '<mark>$1</mark>');
+    });
+    return out;
+  }
+  function search(q){
+    var toks = norm(q).split(' ').filter(Boolean); if(!toks.length) return [];
+    var all = function(s){ return toks.every(function(t){ return s.indexOf(t) > -1; }); };
+    var res = [];
+    IDX.forEach(function(it){
+      var score = 0, snips = [];
+      if(all(it.nt)) score = 100;
+      else if(all(it.nt+' '+it.nd+' '+it.na)) score = 60;
+      if(it.body.length){
+        for(var i = 0; i < it.body.length && snips.length < 3; i++){ if(all(it.body[i].n)) snips.push(it.body[i].raw); }
+        if(snips.length && !score) score = 30;
+      }
+      if(score) res.push({it:it, score:score, snips:snips});
+    });
+    res.sort(function(a,b){ return (b.score-a.score) || (b.snips.length-a.snips.length) || a.it.title.localeCompare(b.it.title,'fa'); });
+    return res.slice(0, 20);
+  }
+  function go(kind, name){
+    try{ var av = document.getElementById('appView'); if(av && av.style.display === 'block') closeApp(); }catch(e){}
+    if(kind === 'App'){ openApp(name); return; }
+    closeCategory();
+    var parent = { water:'health', medical:'health', mental:'health', fire:'safety' }[name];
+    if(parent){ openCategory(parent); }
+    openCategory(name);
+  }
+  function render(q){
+    var box = document.getElementById('ubResults'); if(!box) return;
+    if(!norm(q)){ box.innerHTML = ''; return; }
+    if(!IDX) IDX = build();
+    var toks = norm(q).split(' ').filter(Boolean), res = search(q);
+    if(!res.length){ box.innerHTML = '<div class="ub-none">موردی پیدا نشد.</div>'; return; }
+    box.innerHTML = res.map(function(r, i){
+      var it = r.it;
+      return '<button type="button" class="ub-r" data-i="'+i+'"><b>'+hl(it.title, toks)+'</b><small>'+esc(it.area)+(it.kind==='Category'?' — منو':'')+'</small>'+
+        (r.snips.length ? '<small>'+r.snips.map(function(s){ return '… '+hl(s.length>70 ? s.slice(0,70)+'…' : s, toks); }).join('<br>')+'</small>' : (it.desc && !r.snips.length ? '<small>'+hl(it.desc.length>90 ? it.desc.slice(0,90)+'…' : it.desc, toks)+'</small>' : ''))+
+        '</button>';
+    }).join('');
+    box._res = res;
+  }
+  document.addEventListener('input', function(ev){
+    if(!ev.target || ev.target.id !== 'homeSearch') return;
+    clearTimeout(TIMER); var v = ev.target.value; TIMER = setTimeout(function(){ render(v); }, 120);
   });
-});
+  document.addEventListener('keydown', function(ev){
+    if(!ev.target || ev.target.id !== 'homeSearch' || ev.key !== 'Enter') return;
+    render(ev.target.value); var box = document.getElementById('ubResults');
+    if(box && box._res && box._res.length){ var it = box._res[0].it; go(it.kind, it.name); }
+  });
+  document.addEventListener('click', function(ev){
+    var b = ev.target.closest ? ev.target.closest('.ub-r') : null; if(!b) return;
+    var box = document.getElementById('ubResults'), r = box && box._res ? box._res[parseInt(b.getAttribute('data-i'),10)] : null; if(!r) return;
+    var inp = document.getElementById('homeSearch'); if(inp){ inp.value = ''; }
+    box.innerHTML = ''; var sb = document.getElementById('ubSBox'); if(sb) sb.classList.remove('open');
+    go(r.it.kind, r.it.name);
+  });
+})();
 </script>
 <div id="meetingsMenu" class="hidden">
   <div class="topbar">
@@ -2264,7 +2361,7 @@ init();
     <div class="panel">
       <div class="filters">
         <span class="flabel">جستجو:</span>
-        <input type="text" class="finput" id="srch" placeholder="نام، واحد یا شغل...">
+        <input type="text" class="finput" id="srch" placeholder="نام، کد پرسنلی، واحد یا شغل...">
         <span class="flabel">واحد:</span>
         <select class="finput" id="fUnit"><option value="">همه واحدها</option></select>
         <span class="flabel">شغل:</span>
@@ -2763,6 +2860,29 @@ function pnSortPersons(arr){
     return cmpName(a,b);
   });
 }
+function pnS(s){ return toEn(s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f]/g,' ').replace(/\s+/g,' ').trim().toLowerCase(); }
+function pnQueryOk(p,q){
+  if(!q) return true;
+  const hay = pnS([p.name,p.code,p.unit,p.job,p.status].join(' ')), hayNs = hay.replace(/ /g,'');
+  return pnS(q).split(' ').filter(Boolean).every(t=> hay.indexOf(t)>-1 || hayNs.indexOf(t)>-1);
+}
+function filteredLeft(){
+  const q = (document.getElementById('srch').value||'').trim();
+  const fu = document.getElementById('fUnit').value, fj = document.getElementById('fJob').value;
+  return pnSortPersons(LEFT_PERSONS.filter(p=> (!fu||p.unit===fu) && (!fj||p.job===fj) && pnQueryOk(p,q)));
+}
+function syncLeftPanel(){
+  const q = (document.getElementById('srch').value||'').trim();
+  const fu = document.getElementById('fUnit').value, fj = document.getElementById('fJob').value;
+  const active = !!(q||fu||fj);
+  const n = active ? filteredLeft().length : LEFT_PERSONS.length;
+  document.getElementById('leftCount').textContent = active ? (n+' از '+LEFT_PERSONS.length+' نفر') : (LEFT_PERSONS.length+' نفر');
+  if(active && n>0){
+    const c = document.getElementById('leftContent');
+    if(c.style.display==='none'){ c.style.display=''; document.getElementById('leftChevron').textContent='▾'; }
+    LEFT_RENDERED = true; renderLeftList();
+  } else if(LEFT_RENDERED){ renderLeftList(); }
+}
 function filteredPersons(){
   const q = (document.getElementById('srch').value||'').trim();
   const fu = document.getElementById('fUnit').value;
@@ -2770,7 +2890,7 @@ function filteredPersons(){
   return pnSortPersons(PERSONS.filter(p=>{
     if(fu && p.unit!==fu) return false;
     if(fj && p.job!==fj) return false;
-    if(q && !(p.name.includes(q) || (p.unit||'').includes(q) || (p.job||'').includes(q))) return false;
+    if(!pnQueryOk(p,q)) return false;
     return true;
   }));
 }
@@ -2798,9 +2918,10 @@ function renderList(){
   const list = filteredPersons();
   setResCount('resCnt', list.length, PERSONS.length);
   const container = document.getElementById('personList');
-  if(!list.length){ container.innerHTML = '<div class="empty-note">پرسنلی یافت نشد. از شیت «Personnel» در گوگل‌شیت شروع کن.</div>'; return; }
+  if(!list.length){ container.innerHTML = '<div class="empty-note">پرسنلی یافت نشد. از شیت «Personnel» در گوگل‌شیت شروع کن.</div>'; syncLeftPanel(); return; }
   container.innerHTML = list.map(p=>personCardHtml(p)).join('');
   wireCardExpand(container);
+  syncLeftPanel();
 }
 
 let LEFT_RENDERED = false;
@@ -2810,7 +2931,8 @@ function renderLeftList(){
     container.innerHTML = '<div class="empty-note">فردی با وضعیت «ترک کار» ثبت نشده است.</div>';
     return;
   }
-  container.innerHTML = pnSortPersons(LEFT_PERSONS).map(p=>personCardHtml(p)).join('');
+  const lst = filteredLeft();
+  container.innerHTML = lst.length ? lst.map(p=>personCardHtml(p)).join('') : '<div class="empty-note">موردی با این جستجو یا فیلتر پیدا نشد.</div>';
   wireCardExpand(container);
 }
 
@@ -2981,7 +3103,7 @@ function pfSecInc(p, d){
   const lost = d.inc.reduce((s,i)=>s+(Number(i.lostDays)||0),0);
   return `<div class="pf-title">حوادث</div>
     <div class="badge-row" style="margin-bottom:12px"><span class="badge">تعداد حوادث: ${d.inc.length}</span><span class="badge" style="background:var(--red-bg);color:var(--red)">مجموع روز از دست‌رفته: ${lost}</span></div>
-    ${pfTable(['تاریخ','محل','شرح حادثه','عضو آسیب‌دیده','نوع','روز از دست‌رفته','نظر پزشک'], d.inc.map(i=>`<tr><td>${esc(i.date||'—')}</td><td>${esc(i.location)||'—'}</td><td style="text-align:right">${esc(i.description)||'—'}</td><td>${esc(i.bodyPart)||'—'}</td><td>${esc(i.severity)||'—'}</td><td>${esc(i.lostDays==null?0:i.lostDays)}</td><td style="text-align:right">${esc(i.doctorOpinion)||'—'}</td></tr>`))}`;
+    ${pfTable(['تاریخ','محل','شرح حادثه','عضو آسیب‌دیده','نوع','روز از دست‌رفته'], d.inc.map(i=>`<tr><td>${esc(i.date||'—')}</td><td>${esc(i.location)||'—'}</td><td style="text-align:right">${esc(i.description)||'—'}</td><td>${esc(i.bodyPart)||'—'}</td><td>${esc(i.severity)||'—'}</td><td>${esc(i.lostDays==null?0:i.lostDays)}</td></tr>`))}`;
 }
 function pfSecClinic(p, d){
   if(!d.clinic.length) return `<div class="pf-title">مراجعات درمانگاه</div>${pfEmpty('مراجعه‌ای به درمانگاه ثبت نشده.')}`;
@@ -3063,6 +3185,7 @@ function closeProfile(){
   if(window.__pfChart){ try{ window.__pfChart.destroy(); }catch(e){} window.__pfChart = null; }
 }
 document.addEventListener('keydown', e=>{ if(e.key==='Escape' && PF) closeProfile(); });
+(function(){ var prev = window.__appBack; window.__appBack = function(){ if(PF){ closeProfile(); return true; } return prev ? prev() : false; }; })();
 
 /* --- ردیف‌های فهرست --- */
 function personCardHtml(p){
@@ -4831,7 +4954,7 @@ window.openPhotoLightboxSrc = function(src){
   document.body.appendChild(overlay);
 };
 window.openPhotoLightbox = function(id){
-  const rec = ANOMALIES.find(a=>a.id===id);
+  const rec = ANOMALIES.find(a=>String(a.id)===String(id));
   if(rec && rec.photo) window.openPhotoLightboxSrc(esc(rec.photo));
 };
 
@@ -4861,17 +4984,37 @@ async function sheetGet(name){
     return data || [];
   }catch(e){ console.error(name+' fetch failed', e); return []; }
 }
-async function sheetSet(name, rows){
-  try{
-    const sb = getAnomalySb();
-    const cleanRows = rows.map(r => ({ ...r, closed: r.closed===true||r.closed==='TRUE' }));
-    const { data: existing } = await __selectAll(sb,'anomaly','id');
-    const existingIds = (existing||[]).map(r=>r.id);
-    if(existingIds.length){ await sb.from('anomaly').delete().in('id', existingIds); }
-    if(cleanRows.length){ await sb.from('anomaly').insert(cleanRows); }
-  }catch(e){ console.error(name+' save failed', e); }
+function dbRow(a){
+  return { row:a.row, description:a.description, location:a.location, dateRaised:a.dateRaised, reporter:a.reporter,
+    riskPotential:a.riskPotential, responsible:a.responsible, actionTaken:a.actionTaken, closed:!!a.closed, photo:a.photo||'' };
 }
-async function saveAnomalies(){ await sheetSet('Anomaly', ANOMALIES.map(a=>({...a, closed: a.closed?'TRUE':'FALSE'}))); }
+const NOPERM_MSG = 'تغییر در پایگاه داده ثبت نشد. احتمالاً این کاربر اجازه‌ی ویرایش/حذف ندارد (سیاست دسترسی جدول anomaly) یا وارد حساب نشده است.';
+async function dbUpdateAnomaly(rec){
+  try{
+    const { data, error } = await getAnomalySb().from('anomaly').update(dbRow(rec)).eq('id', rec.id).select('id');
+    if(error){ alert('خطا در ذخیره: '+(error.message||error)); return false; }
+    if(!data || !data.length){ alert(NOPERM_MSG); return false; }
+    return true;
+  }catch(e){ alert('خطا: '+(e.message||e)); return false; }
+}
+async function dbDeleteAnomaly(id){
+  try{
+    const { data, error } = await getAnomalySb().from('anomaly').delete().eq('id', id).select('id');
+    if(error){ alert('خطا در حذف: '+(error.message||error)); return false; }
+    if(!data || !data.length){ alert(NOPERM_MSG); return false; }
+    return true;
+  }catch(e){ alert('خطا: '+(e.message||e)); return false; }
+}
+async function dbInsertAnomaly(rec){
+  try{
+    const sb = getAnomalySb(), base = dbRow(rec);
+    let res = await sb.from('anomaly').insert(base).select('id');
+    if(res.error && /\bid\b/i.test(res.error.message||'')){ res = await sb.from('anomaly').insert(Object.assign({id:String(Date.now())}, base)).select('id'); }
+    if(res.error){ alert('خطا در ثبت: '+(res.error.message||res.error)); return null; }
+    if(!res.data || !res.data.length){ alert(NOPERM_MSG); return null; }
+    return res.data[0].id;
+  }catch(e){ alert('خطا: '+(e.message||e)); return null; }
+}
 
 async function loadAll(){
   const rows = await sheetGet('Anomaly');
@@ -4974,8 +5117,8 @@ function renderList(){
 
   table.querySelectorAll('.a-check').forEach(chk=>{
     chk.addEventListener('change', async ()=>{
-      const rec = ANOMALIES.find(a=>a.id===chk.dataset.id);
-      if(rec){ rec.closed = chk.checked; await saveAnomalies(); renderKpis(); renderList(); }
+      const rec = ANOMALIES.find(a=>String(a.id)===String(chk.dataset.id));
+      if(rec){ const prev = rec.closed; rec.closed = chk.checked; if(!(await dbUpdateAnomaly(rec))) rec.closed = prev; renderKpis(); renderList(); }
     });
   });
 }
@@ -5007,8 +5150,9 @@ function editFormHtml(a){
 let pendingPhotoDataUrl = null;
 let pendingPhotoRemoved = false;
 window.startEditAnomaly = function(id){
-  const rec = ANOMALIES.find(a=>a.id===id);
+  const rec = ANOMALIES.find(a=>String(a.id)===String(id));
   const panel = document.getElementById('addAnomalyPanel');
+  if(!rec){ alert('رکورد پیدا نشد.'); return; }
   panel.innerHTML = editFormHtml(rec);
   pendingPhotoDataUrl = null;
   pendingPhotoRemoved = false;
@@ -5033,7 +5177,9 @@ window.startEditAnomaly = function(id){
 };
 window.cancelEdit = function(id){ document.getElementById('addAnomalyPanel').innerHTML=''; };
 window.saveEdit = async function(id){
-  const rec = ANOMALIES.find(a=>a.id===id);
+  const rec = ANOMALIES.find(a=>String(a.id)===String(id));
+  if(!rec){ alert('رکورد پیدا نشد.'); return; }
+  const prevRec = Object.assign({}, rec);
   rec.location = document.getElementById('ef-location').value.trim();
   rec.dateRaised = document.getElementById('ef-date').value.trim();
   rec.reporter = document.getElementById('ef-reporter').value.trim();
@@ -5043,15 +5189,16 @@ window.saveEdit = async function(id){
   rec.actionTaken = document.getElementById('ef-action').value.trim();
   if(pendingPhotoRemoved) rec.photo = '';
   else if(pendingPhotoDataUrl) rec.photo = pendingPhotoDataUrl;
-  await saveAnomalies();
+  if(!(await dbUpdateAnomaly(rec))){ Object.assign(rec, prevRec); return; }
   document.getElementById('addAnomalyPanel').innerHTML = '';
   populateFilters(); renderKpis(); renderList();
 };
 window.deleteAnomaly = async function(id){
   if(!confirm('این آنومالی حذف شود؟')) return;
-  const idx = ANOMALIES.findIndex(a=>a.id===id);
-  if(idx>-1) ANOMALIES.splice(idx,1);
-  await saveAnomalies();
+  const idx = ANOMALIES.findIndex(a=>String(a.id)===String(id));
+  if(idx<0) return;
+  if(!(await dbDeleteAnomaly(ANOMALIES[idx].id))) return;
+  ANOMALIES.splice(idx,1);
   populateFilters(); renderKpis(); renderList();
 };
 
@@ -5097,15 +5244,17 @@ document.getElementById('btnAddAnomaly').addEventListener('click', ()=>{
   document.getElementById('nf-save').addEventListener('click', async ()=>{
     const desc = document.getElementById('nf-desc').value.trim();
     if(!desc){ alert('شرح آنومالی الزامی است.'); return; }
-    ANOMALIES.push({
-      id: ''+Date.now()+Math.random(), row: nextRow,
+    const newRec = {
+      id: null, row: nextRow,
       description: desc, location: document.getElementById('nf-location').value.trim(),
       dateRaised: document.getElementById('nf-date').value.trim(), reporter: document.getElementById('nf-reporter').value.trim(),
       riskPotential: document.getElementById('nf-risk').value.trim(), responsible: document.getElementById('nf-responsible').value.trim(),
       actionTaken: document.getElementById('nf-action').value.trim(), closed: false,
       photo: nfPhotoDataUrl || '',
-    });
-    await saveAnomalies();
+    };
+    const newId = await dbInsertAnomaly(newRec);
+    if(newId === null) return;
+    newRec.id = newId; ANOMALIES.push(newRec);
     panel.innerHTML = '';
     populateFilters(); renderKpis(); renderList();
   });
@@ -5243,6 +5392,50 @@ table.atbl tr:hover td{background:var(--gray-050)}
 .edit-field input[readonly]{background:var(--gray-100);color:var(--gray-700)}
 .btn.exp{background:#fff;color:var(--gray-800);border:1px solid var(--border)}
 .btn.exp:hover{background:var(--orange-light);border-color:var(--orange);color:var(--orange-dark)}
+.inc-row{cursor:pointer}
+table.atbl tr.inc-row:hover td{background:var(--orange-light)!important}
+#incDetail{position:fixed;top:0;right:0;bottom:0;left:0;z-index:500;background:var(--bg);overflow-y:auto}
+.id-top{position:sticky;top:0;z-index:5;background:linear-gradient(135deg,#1f2225,#2b2f33 55%,#3d4247);color:#fff;padding:12px 22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.id-top h2{font-size:15px;flex:1 1 220px}
+.id-top button{font-family:inherit}
+#anBack{border:1px solid rgba(255,255,255,.4);background:transparent;color:#fff;border-radius:9px;padding:8px 14px;cursor:pointer;font-weight:700}
+#anMsg{font-size:12px;color:#9be3b0;font-weight:700}
+.id-body{max-width:1100px;margin:0 auto;padding:18px 20px 60px}
+.an-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px}
+.an-card h3{font-size:14px;color:var(--gray-900);margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--orange)}
+.an-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
+.an-f{display:flex;flex-direction:column;gap:3px}
+.an-f.wide{grid-column:1/-1}
+.an-f label{font-size:11px;color:var(--muted);font-weight:700}
+.an-f input,.an-f select,.an-f textarea,.an-t input,.an-t select,.an-t textarea{width:100%;border:1px solid var(--border);border-radius:7px;padding:7px 9px;font-family:inherit;font-size:12.5px;background:#fff;color:var(--text)}
+.an-f textarea,.an-t textarea{resize:vertical}
+.an-kvs{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:10px}
+.an-kv{background:var(--gray-050);border:1px solid var(--border);border-radius:8px;padding:7px 10px;display:flex;flex-direction:column;gap:2px}
+.an-kv span{font-size:10.5px;color:var(--muted)}
+.an-kv b{font-size:13px;color:var(--gray-900)}
+.an-desc{background:var(--orange-light);border:1px dashed var(--orange);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.9}
+.an-desc span{display:block;font-size:10.5px;color:var(--muted);margin-bottom:3px}
+.an-sub2{font-size:12.5px;font-weight:800;color:var(--gray-800);margin:14px 0 8px}
+.an-sub{font-size:11px;color:var(--muted)}
+.an-checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px}
+.an-checks label{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;background:var(--gray-050);border:1px solid var(--border);border-radius:8px;padding:7px 10px;cursor:pointer}
+.an-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.an-tbl{overflow-x:auto}
+table.an-t{width:100%;border-collapse:collapse;font-size:12px}
+table.an-t th{background:var(--gray-050);color:var(--muted);font-size:11px;padding:7px;border-bottom:1px solid var(--border);white-space:nowrap}
+table.an-t td{padding:6px;border-bottom:1px solid var(--border);vertical-align:top;min-width:96px}
+table.an-t td:first-child{min-width:28px;text-align:center}
+table.an-t tr.an-over td{background:var(--bad-bg)}
+.an-prog{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:12px}
+.an-bar{flex:0 0 220px;height:9px;background:var(--gray-200);border-radius:6px;overflow:hidden}
+.an-bar i{display:block;height:100%;background:var(--good)}
+.an-sugs{background:var(--warn-bg);border:1px dashed var(--warn);border-radius:10px;padding:10px;margin-bottom:12px}
+.an-sug{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12.5px}
+.an-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:10px}
+.an-stat{background:var(--gray-050);border:1px solid var(--border);border-top:3px solid var(--orange);border-radius:8px;padding:10px;text-align:center}
+.an-stat b{display:block;font-size:20px;color:var(--gray-900)}
+.an-stat span{font-size:11px;color:var(--muted)}
+.an-note{background:var(--bad-bg);color:var(--bad);border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:2}
 #printMeta{display:none}
 @page{size:A4 landscape;margin:10mm}
 @media print{
@@ -5250,6 +5443,11 @@ table.atbl tr:hover td{background:var(--gray-050)}
   body{background:#fff;font-size:11px}
   .topbar{position:static;box-shadow:none;padding:10px 16px}
   .toolbar,#addIncidentPanel,.noprint,#incidentEmpty{display:none!important}
+  body.inc-open .wrap,body.inc-open .topbar{display:none!important}
+  #incDetail{position:static!important;overflow:visible!important;background:#fff}
+  .id-top{position:static;background:#fff;color:#000;box-shadow:none}
+  .an-card{box-shadow:none;break-inside:avoid}
+  .id-body{max-width:none;padding:0}
   .wrap{max-width:none;padding:8px 0}
   #printMeta{display:block;margin:0 0 10px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:11px;line-height:1.9;background:var(--gray-050)}
   .kpi-grid{grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
@@ -5312,11 +5510,23 @@ table.atbl tr:hover td{background:var(--gray-050)}
     <div class="spacer"></div>
     <span class="flabel" id="iCount"></span>
   </div>
-  <datalist id="dlCodes"></datalist>
+  <datalist id="dlCodes"></datalist><datalist id="dlNames"></datalist>
   <datalist id="dlLocs"></datalist>
   <div id="addIncidentPanel"></div>
   <div class="panel table-wrap"><table class="atbl" id="incidentTable"></table></div>
   <div id="incidentEmpty" class="empty-note hidden">موردی یافت نشد — از دکمه «افزودن حادثه جدید» شروع کن.</div>
+</div>
+
+<div id="incDetail" class="hidden">
+  <div class="id-top">
+    <button type="button" id="anBack">→ بازگشت به فهرست</button>
+    <h2 id="anTitle">تحلیل حادثه</h2>
+    <span id="anMsg" class="noprint"></span>
+    <button type="button" class="btn ghost noprint" id="anEdit">✎ ویرایش اطلاعات پایه</button>
+    <button type="button" class="btn exp noprint" id="anPrint">🖨 چاپ گزارش</button>
+    <button type="button" class="btn noprint" id="anSave">💾 ذخیره تحلیل</button>
+  </div>
+  <div class="id-body" id="anBody"></div>
 </div>
 
 <script>
@@ -5387,7 +5597,7 @@ async function sheetSet(name, rows){
 }
 async function saveIncidents(){ await sheetSet('Incidents', INCIDENTS); }
 function incFind(id){ return INCIDENTS.find(function(i){ return String(i.id)===String(id); }); }
-function incPayload(r){ var o={}; Object.keys(r).forEach(function(k){ if(k!=='id') o[k]=r[k]; }); return o; }
+function incPayload(r){ var o={}; Object.keys(r).forEach(function(k){ if(k!=='id' && k!=='analysis' && k!=='doctorOpinion') o[k]=r[k]; }); return o; }
 function incFail(msg,err){ alert(msg+(err?'\n'+String(err.message||err):'')); }
 async function dbInsertIncident(rec){
   try{
@@ -5422,6 +5632,7 @@ async function applyIncidentsEditVisibility(){
     const { data: profile } = await sb.from('profiles').select('role,edit_sections').eq('id', user.id).single();
     const canEdit = profile && (profile.role === 'admin' || (profile.edit_sections||[]).indexOf('incidents') !== -1);
     if(!canEdit){
+      window.__incCanEdit = false;
       const btn = document.getElementById('btnAddIncident');
       if(btn) btn.style.display = 'none';
       const mb = document.getElementById('btnMatchPersons'); if(mb) mb.style.display = 'none';
@@ -5485,7 +5696,7 @@ async function loadAll(){
       bodyPart: r.bodyPart||'',
       lostDays: r.lostDays!==undefined && r.lostDays!==null && r.lostDays!=='' ? Number(r.lostDays) : 0,
       severity: r.severity||'',
-      doctorOpinion: r.doctorOpinion||''
+      analysis: (function(v){ if(typeof v==='string'){ try{ v=JSON.parse(v); }catch(e){ v=null; } } return (v && typeof v==='object') ? v : null; })(r.analysis)
     };
     if(!o.severity) o.severity=autoSeverity(o.lostDays);
     var p=findPerson(o.personnelCode);
@@ -5612,13 +5823,14 @@ function parseFull(str){
   return {y:y,m:mo,d:d};
 }
 function dateNum(str){ var d=parseFull(str); return d ? d.y*10000+d.m*100+d.d : 0; }
+function normSrch(s){ return toEn(s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\u200f]/g,' ').replace(/\s+/g,' ').trim().toLowerCase(); }
 function getFiltered(){
   const q=(document.getElementById('iSrch').value||'').trim();
   const f=function(id){return document.getElementById(id).value;};
   const sv=f('iSevFilter'), un=f('iUnitFilter'), jb=f('iJobFilter'), lc=f('iLocFilter'), bp=f('iBodyPartFilter');
   const yr=f('iYearFilter'), mo=f('iMonthFilter'), fd=dateNum(f('iFromDate')), td=dateNum(f('iToDate'));
   return INCIDENTS.filter(i=>{
-    if(q && ![i.description,i.injuredName,i.personnelCode,i.location,i.doctorOpinion].some(function(x){return (x||'').includes(q);})) return false;
+    if(q){ var hay=normSrch([i.description,i.injuredName,i.personnelCode,i.location,i.unit,i.job,i.bodyPart,i.severity].join(' ')), hayNs=hay.replace(/ /g,''); if(!normSrch(q).split(' ').filter(Boolean).every(function(t){ return hay.indexOf(t)>-1 || hayNs.indexOf(t)>-1; })) return false; }
     if(sv && i.severity!==sv) return false;
     if(un && i.unit!==un) return false;
     if(jb && i.job!==jb) return false;
@@ -5642,21 +5854,37 @@ function renderList(){
   const table=document.getElementById('incidentTable'), emptyNote=document.getElementById('incidentEmpty');
   if(!filtered.length){ table.innerHTML=''; emptyNote.classList.remove('hidden'); return; }
   emptyNote.classList.add('hidden');
-  const thead='<tr><th>ردیف</th><th>کد پرسنلی</th><th>نام حادثه‌دیده</th><th>واحد کاری</th><th>شغل</th><th>محل حادثه</th><th>شرح مختصر حادثه</th><th>تاریخ</th><th>عضو آسیب‌دیده</th><th>نوع حادثه</th><th>روزهای از دست‌رفته</th><th>نظر پزشک</th><th class="noprint">عملیات</th></tr>';
-  const tbody=filtered.map(i=>'<tr data-id="'+esc(i.id)+'">'+
+  const thead='<tr><th>ردیف</th><th>کد پرسنلی</th><th>نام حادثه‌دیده</th><th>واحد کاری</th><th>شغل</th><th>محل حادثه</th><th>شرح مختصر حادثه</th><th>تاریخ</th><th>عضو آسیب‌دیده</th><th>نوع حادثه</th><th>روزهای از دست‌رفته</th><th>وضعیت تحلیل</th><th class="noprint">عملیات</th></tr>';
+  const tbody=filtered.map(i=>'<tr class="inc-row" data-id="'+esc(i.id)+'" onclick="openIncident(\''+esc(i.id)+'\')">'+
     '<td>'+esc(i.row)+'</td><td>'+(esc(i.personnelCode)||'—')+'</td><td>'+(esc(i.injuredName)||'—')+'</td><td>'+(esc(i.unit)||'—')+'</td><td>'+(esc(i.job)||'—')+'</td>'+
     '<td>'+(esc(i.location)||'—')+'</td><td class="desc-cell">'+(esc(i.description)||'—')+'</td><td>'+(esc(i.date)||'—')+'</td><td>'+(esc(i.bodyPart)||'—')+'</td>'+
     '<td><span class="sev" style="background:'+(SEV_COLOR[i.severity]||'#8a9096')+'">'+esc(i.severity)+'</span></td><td>'+esc(i.lostDays)+'</td>'+
-    '<td class="desc-cell">'+(esc(i.doctorOpinion)||'—')+'</td>'+
-    '<td class="noprint"><button class="icon-btn" onclick="startEditIncident(\''+esc(i.id)+'\')">ویرایش</button> <button class="icon-btn danger" onclick="deleteIncident(\''+esc(i.id)+'\')">حذف</button></td></tr>').join('');
+    '<td>'+anBadge(i)+'</td>'+
+    '<td class="noprint"><button class="icon-btn" onclick="event.stopPropagation();startEditIncident(\''+esc(i.id)+'\')">ویرایش</button> <button class="icon-btn danger" onclick="event.stopPropagation();deleteIncident(\''+esc(i.id)+'\')">حذف</button></td></tr>').join('');
   table.innerHTML='<thead>'+thead+'</thead><tbody>'+tbody+'</tbody>';
 }
 function refreshAll(){ populateFilters(); renderList(); }
+
+function normNm(s){ return String(s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\s]+/g,'').trim(); }
+function linkNameToCode(codeId, nameId){
+  var d=document.getElementById('dlNames');
+  if(d && !d.options.length) d.innerHTML=PERSONS.map(function(p){return '<option value="'+esc(p.name)+'">'+esc(p.code)+'</option>';}).join('');
+  var nm=document.getElementById(nameId), cd=document.getElementById(codeId);
+  if(!nm||!cd) return;
+  var go=function(){
+    if(nm.readOnly||String(cd.value).trim()) return;
+    var k=normNm(nm.value); if(!k) return;
+    var m=PERSONS.filter(function(p){return normNm(p.name)===k;});
+    if(m.length===1){ cd.value=m[0].code; cd.dispatchEvent(new Event('input')); }
+  };
+  nm.addEventListener('change',go);
+  nm.addEventListener('input',function(e){ if(!e.inputType||e.inputType==='insertReplacementText') go(); });
+}
 function formHtml(i,isNew){
   const sevOpts=SEVS.map(function(s){return '<option value="'+s+'"'+(s===i.severity?' selected':'')+'>'+s+'</option>';}).join('');
   return '<div class="edit-panel"><div class="edit-grid">'+
     '<div class="edit-field"><label>کد پرسنلی</label><input id="f-code" list="dlCodes" value="'+esc(i.personnelCode)+'" placeholder="کد را وارد کنید"></div>'+
-    '<div class="edit-field"><label>نام حادثه‌دیده</label><input id="f-name" value="'+esc(i.injuredName)+'"></div>'+
+    '<div class="edit-field"><label>نام حادثه‌دیده</label><input id="f-name" list="dlNames" value="'+esc(i.injuredName)+'"></div>'+
     '<div class="edit-field"><label>واحد کاری</label><input id="f-unit" value="'+esc(i.unit)+'"></div>'+
     '<div class="edit-field"><label>شغل</label><input id="f-job" value="'+esc(i.job)+'"></div>'+
     '<div class="hint" id="f-hint"></div>'+
@@ -5667,7 +5895,6 @@ function formHtml(i,isNew){
     '<div class="edit-field"><label>نوع حادثه</label><select id="f-sev">'+sevOpts+'</select></div>'+
     '</div><div class="edit-grid wide" style="margin-top:10px">'+
     '<div class="edit-field"><label>شرح مختصر حادثه</label><textarea id="f-desc">'+esc(i.description)+'<\/textarea></div>'+
-    '<div class="edit-field"><label>نظر پزشک</label><textarea id="f-doc">'+esc(i.doctorOpinion)+'<\/textarea></div>'+
     '</div><div class="edit-actions"><button class="btn ghost" onclick="document.getElementById(\'addIncidentPanel\').innerHTML=\'\'">انصراف</button>'+
     '<button class="btn" id="f-save">ذخیره</button></div></div>';
 }
@@ -5679,7 +5906,7 @@ function wireForm(id){
     if(p){ g('f-name').value=p.name||''; g('f-unit').value=p.unit||''; g('f-job').value=p.job||''; lock(true); g('f-hint').textContent='نام، واحد و شغل از فهرست پرسنل پر شد.'; }
     else { lock(false); g('f-hint').textContent=g('f-code').value.trim()?'این کد در فهرست پرسنل پیدا نشد؛ نام، واحد و شغل را دستی وارد کنید.':''; }
   };
-  g('f-code').addEventListener('input',onCode); onCode();
+  g('f-code').addEventListener('input',onCode); onCode(); linkNameToCode('f-code','f-name');
   let manual=!!id; // برای رکورد موجود، نوع ذخیره‌شده تغییر داده نمی‌شود مگر کاربر روز را عوض کند
   g('f-sev').addEventListener('change',function(){ manual=true; });
   g('f-days').addEventListener('input',function(){ if(g('f-sev').value!==SEV_FATAL){ g('f-sev').value=autoSeverity(g('f-days').value); } manual=false; });
@@ -5689,7 +5916,7 @@ function wireForm(id){
     const vals={
       personnelCode:g('f-code').value.trim(), injuredName:g('f-name').value.trim(), unit:g('f-unit').value.trim(), job:g('f-job').value.trim(),
       date:g('f-date').value.trim(), location:g('f-loc').value.trim(), bodyPart:g('f-body').value.trim(),
-      lostDays:Number(g('f-days').value)||0, severity:g('f-sev').value, doctorOpinion:g('f-doc').value.trim(), description:desc
+      lostDays:Number(g('f-days').value)||0, severity:g('f-sev').value, description:desc
     };
     let ok=true;
     if(id!==null && id!==undefined){
@@ -5722,7 +5949,7 @@ window.deleteIncident=async function(id){
 document.getElementById('btnAddIncident').addEventListener('click',function(){
   const panel=document.getElementById('addIncidentPanel');
   if(panel.innerHTML){ panel.innerHTML=''; return; }
-  panel.innerHTML=formHtml({personnelCode:'',injuredName:'',unit:'',job:'',date:todayJ(),location:'',bodyPart:'',lostDays:0,severity:'FAC',doctorOpinion:'',description:''},true);
+  panel.innerHTML=formHtml({personnelCode:'',injuredName:'',unit:'',job:'',date:todayJ(),location:'',bodyPart:'',lostDays:0,severity:'FAC',description:''},true);
   wireForm(null);
 });
 document.getElementById('btnMatchPersons').addEventListener('click',async function(){
@@ -5762,10 +5989,10 @@ function incFilterSummary(){
 function incExportRows(list){
   return list.map(function(i,k){ return [
     k+1, i.personnelCode||'', i.injuredName||'', i.unit||'', i.job||'', i.location||'', i.description||'',
-    i.date||'', i.bodyPart||'', i.severity||'', Number(i.lostDays)||0, i.doctorOpinion||''
+    i.date||'', i.bodyPart||'', i.severity||'', Number(i.lostDays)||0
   ]; });
 }
-var INC_HEAD=['ردیف','کد پرسنلی','نام حادثه‌دیده','واحد کاری','شغل','محل حادثه','شرح مختصر حادثه','تاریخ','عضو آسیب‌دیده','نوع حادثه','روزهای از دست‌رفته','نظر پزشک'];
+var INC_HEAD=['ردیف','کد پرسنلی','نام حادثه‌دیده','واحد کاری','شغل','محل حادثه','شرح مختصر حادثه','تاریخ','عضو آسیب‌دیده','نوع حادثه','روزهای از دست‌رفته'];
 function incExportExcel(){
   if(typeof XLSX==='undefined'){ alert('کتابخانه اکسل بارگذاری نشده است (اتصال اینترنت را بررسی کنید).'); return; }
   var list=getFiltered();
@@ -5779,9 +6006,9 @@ function incExportExcel(){
     INC_HEAD
   ].concat(incExportRows(list));
   var ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:6},{wch:12},{wch:20},{wch:16},{wch:16},{wch:18},{wch:48},{wch:12},{wch:16},{wch:14},{wch:14},{wch:36}];
-  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:11}},{s:{r:1,c:0},e:{r:1,c:11}},{s:{r:2,c:0},e:{r:2,c:11}}];
-  ws['!autofilter']={ref:'A5:L'+(5+list.length)};
+  ws['!cols']=[{wch:6},{wch:12},{wch:20},{wch:16},{wch:16},{wch:18},{wch:48},{wch:12},{wch:16},{wch:14},{wch:14}];
+  ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:10}},{s:{r:1,c:0},e:{r:1,c:10}},{s:{r:2,c:0},e:{r:2,c:10}}];
+  ws['!autofilter']={ref:'A5:K'+(5+list.length)};
   ws['!views']=[{RTL:true,state:'frozen',ySplit:5}];
   // خلاصه بر اساس نوع حادثه
   var sev=[['نوع حادثه','تعداد','روزهای از دست‌رفته']];
@@ -5806,6 +6033,273 @@ function incExportPdf(){
 }
 document.getElementById('btnExpXlsx').addEventListener('click',incExportExcel);
 document.getElementById('btnExpPdf').addEventListener('click',incExportPdf);
+
+/* ===== تحلیل کامل حادثه + اقدام اصلاحی و پیشگیرانه ===== */
+var AN_ID=null, AN_DIRTY=false, AN_A=null, AN_SUG=[];
+var AN_KIND=['حادثه همراه با روز از دست‌رفته (LTI)','نیاز به درمان پزشکی بدون روز از دست‌رفته (MTC)','کمک‌های اولیه (FAC)','شبه‌حادثه (Near-miss)','خسارت به تجهیزات / اموال','آتش‌سوزی / انفجار','حادثه زیست‌محیطی'];
+var AN_SHIFT=['صبح','عصر','شب','اضافه‌کاری / تعطیل'];
+var AN_TASK=['کار روتین','کار غیرروتین','تعمیرات / نگهداری','راه‌اندازی / توقف','حمل و جابه‌جایی','رانندگی / تردد'];
+var AN_MECH=['سقوط از ارتفاع','سقوط هم‌سطح (لغزیدن / زمین‌خوردن)','برخورد با جسم','اصابت جسم پرتابی / ریزشی','گیر کردن بین یا زیر اجسام','برش / سوراخ شدن','تماس با ماشین‌آلات متحرک','تماس با مواد شیمیایی / سوختگی','برق‌گرفتگی','فشار بدنی / بلند کردن نادرست بار','حادثه وسیله نقلیه','ریزش سنگ / جبهه‌کار','سایر'];
+var AN_NATURE=['بریدگی / زخم','کوفتگی / له‌شدگی','شکستگی','دررفتگی / پیچ‌خوردگی','سوختگی','آسیب چشمی','خفگی / مسمومیت','ضربه به سر','قطع عضو','آسیب عضلانی / کمر','سایر'];
+var AN_AGENT=['ماشین‌آلات سنگین','تجهیزات دوار','ابزار دستی','ابزار برقی','وسیله نقلیه','جرثقیل / بالابر','تأسیسات برقی','مواد شیمیایی','کف / سطح کار','مواد معدنی / سنگ','سایر'];
+var AN_STATUS=['بررسی نشده','در حال بررسی','تکمیل شد','بسته شد'];
+var AN_PERMIT=['مجوز کار / دستورالعمل وجود داشت','مجوز کار / دستورالعمل وجود نداشت','مرتبط نیست'];
+var AN_PPE=['استفاده کامل بود','استفاده ناقص بود','استفاده نشده بود','مرتبط نیست'];
+var AN_TRAIN=['آموزش دیده بود','آموزش ندیده بود','نامشخص'];
+var AN_SUPER=['ناظر حاضر بود','ناظر حاضر نبود','نامشخص'];
+var AN_TRANSFER=['نیاز نشد','کمک‌های اولیه در محل','درمانگاه','بیمارستان'];
+var AN_6M=[['man','انسان (دانش، مهارت، رفتار، شرایط جسمی)'],['machine','ماشین‌آلات و تجهیزات'],['method','روش و دستورالعمل کار'],['material','مواد'],['env','محیط کار'],['mgmt','مدیریت و سیستم (آموزش، نظارت، منابع، فرهنگ ایمنی)']];
+var AN_CTRL=['حذف خطر','جایگزینی','کنترل مهندسی','کنترل اداری / آموزش','تجهیزات حفاظت فردی'];
+var AN_ATYPE=['اقدام فوری (مهار)','اقدام اصلاحی','اقدام پیشگیرانه'];
+var AN_ASTAT=['برنامه‌ریزی‌شده','در حال انجام','انجام شد','اثربخشی تأیید شد'];
+var AN_INFORMED=['گفتگوی ایمنی (Toolbox talk)','بولتن / اطلاعیه ایمنی','جلسه‌ی کمیته‌ی ایمنی','آموزش هم‌گروه‌ها'];
+var AN_AUTH=['اطلاع به مدیریت ارشد','اداره‌ی کار','سازمان تأمین اجتماعی','بیمه‌ی مسئولیت'];
+var AN_RL=['۱ — بسیار بعید','۲ — بعید','۳ — ممکن','۴ — محتمل','۵ — تقریباً قطعی'];
+var AN_RC=['۱ — ناچیز','۲ — جزئی','۳ — متوسط','۴ — شدید','۵ — فاجعه‌بار'];
+var AN_VRES=['اثربخش بود','نیازمند بازنگری','هنوز ارزیابی نشده'];
+/* [شناسه، عنوان، اقدام پیشنهادی، سطح کنترل] */
+var AN_ACTS=[
+ ['a_ppe','عدم استفاده یا استفاده ناقص از تجهیزات حفاظت فردی','کنترل PPE قبل از شروع کار هر شیفت و تأمین تجهیزات استاندارد و متناسب برای همه‌ی افراد',AN_CTRL[4]],
+ ['a_proc','انجام کار بدون رعایت دستورالعمل یا بدون مجوز کار','بازنگری دستورالعمل کار و الزام به صدور مجوز کار برای فعالیت‌های پرخطر',AN_CTRL[3]],
+ ['a_haste','عجله و فشار زمانی در انجام کار','بازنگری برنامه‌ی کاری و زمان‌بندی؛ حذف فشار تولید بر ایمنی',AN_CTRL[3]],
+ ['a_bypass','از کار انداختن یا برداشتن حفاظ و تجهیزات ایمنی','نصب حفاظ ثابت غیرقابل‌برداشت یا اینترلاک و بازرسی دوره‌ای حفاظ‌ها',AN_CTRL[2]],
+ ['a_loto','عدم اجرای قفل‌گذاری / برچسب‌گذاری (LOTO)','استقرار رویه‌ی LOTO، آموزش افراد و ممیزی دوره‌ای اجرای آن',AN_CTRL[3]],
+ ['a_pos','قرارگیری در محل یا مسیر خطرناک','تعیین و علامت‌گذاری محدوده‌های ممنوعه و جداسازی مسیر تردد پیاده از ماشین‌آلات',AN_CTRL[2]],
+ ['a_tool','استفاده نادرست از ابزار یا تجهیزات','آموزش عملی کار با ابزار و تجهیزات و جایگزینی ابزار نامناسب',AN_CTRL[3]],
+ ['a_lift','بلند کردن یا حمل نادرست بار','آموزش ارگونومی حمل بار و تأمین وسایل کمکی (چرخ‌دستی، بالابر)',AN_CTRL[2]],
+ ['a_attn','بی‌توجهی، حواس‌پرتی یا شوخی حین کار','برگزاری گفتگوی ایمنی در آغاز شیفت و تقویت فرهنگ گزارش‌دهی',AN_CTRL[3]],
+ ['a_fatigue','خستگی، کم‌خوابی یا شرایط جسمی نامناسب','بازنگری ساعات کار و استراحت و پایش آمادگی افراد در کارهای پرخطر',AN_CTRL[3]],
+ ['a_height','کار در ارتفاع بدون سیستم جلوگیری از سقوط','الزام به هارنس و نقطه‌ی اتصال تأییدشده و صدور مجوز کار در ارتفاع',AN_CTRL[2]]
+];
+var AN_CONDS=[
+ ['c_guard','نبود یا نقص حفاظ ماشین‌آلات','نصب یا ترمیم حفاظ استاندارد روی قسمت‌های متحرک',AN_CTRL[2]],
+ ['c_floor','کف لغزنده، ناهموار یا نامنظم','اصلاح و نظافت سطح کار، کف ضدلغزش و علامت‌گذاری مناطق خطر',AN_CTRL[2]],
+ ['c_light','روشنایی، سروصدا یا گرد و غبار نامناسب','ارتقای روشنایی و تهویه، کنترل گرد و غبار و اندازه‌گیری دوره‌ای عوامل زیان‌آور',AN_CTRL[2]],
+ ['c_equip','ابزار یا تجهیزات معیوب','برنامه‌ی نگهداری پیشگیرانه (PM) و جداسازی تجهیز معیوب با برچسب «خارج از سرویس»',AN_CTRL[2]],
+ ['c_sign','نبود علائم هشدار و تابلوهای ایمنی','نصب علائم ایمنی و هشدار در محل و راهنمای بصری کار',AN_CTRL[3]],
+ ['c_house','بی‌نظمی و شلوغی محیط کار (5S)','اجرای 5S و تعیین مسئول نظم و نظافت هر واحد',AN_CTRL[3]],
+ ['c_rock','ناپایداری جبهه‌کار / ریزش سنگ','پایش پایداری جبهه‌کار، پاک‌سازی سنگ سست و تحکیم قبل از ورود نفرات',AN_CTRL[2]],
+ ['c_vent','تهویه یا اکسیژن نامناسب در فضای بسته','اندازه‌گیری گاز پیش از ورود و صدور مجوز ورود به فضای محصور',AN_CTRL[3]],
+ ['c_access','نبود راه دسترسی یا تردد ایمن','احداث یا اصلاح مسیر دسترسی ایمن و نرده‌گذاری',AN_CTRL[2]],
+ ['c_elec','نقص ایمنی تأسیسات برقی','بازرسی تأسیسات برقی، ارت و کلید حفاظت جان و رعایت LOTO',AN_CTRL[2]]
+];
+var AN_BYMECH={'سقوط از ارتفاع':['a_height'],'ریزش سنگ / جبهه‌کار':['c_rock'],'برق‌گرفتگی':['c_elec','a_loto'],'تماس با ماشین‌آلات متحرک':['c_guard','a_loto'],'گیر کردن بین یا زیر اجسام':['c_guard','a_pos'],'فشار بدنی / بلند کردن نادرست بار':['a_lift'],'سقوط هم‌سطح (لغزیدن / زمین‌خوردن)':['c_floor','c_house'],'حادثه وسیله نقلیه':['a_pos','c_access']};
+
+function anDefault(){ return {status:AN_STATUS[0],kind:'',reportNo:'',reportDate:'',team:'',time:'',shift:'',task:'',mechanism:'',nature:'',agent:'',witnesses:'',costDirect:'',
+  sequence:'',permit:'',ppe:'',ppeDetail:'',training:'',supervisor:'',immediate:'',transfer:'',evidence:'',acts:[],conds:[],
+  causes:{man:'',machine:'',method:'',material:'',env:'',mgmt:''},whys:['','','','',''],rootStatement:'',rL:'',rC:'',rrL:'',rrC:'',
+  actions:[],vBy:'',vDate:'',vResult:'',lessons:'',informed:[],authorities:[],authDate:'',approvedBy:''}; }
+function anOptHtml(list,val,blank){ return (blank===false?'':'<option value="">— انتخاب —</option>')+list.map(function(o,i){ return '<option value="'+esc(o)+'"'+(String(o)===String(val)?' selected':'')+'>'+esc(o)+'</option>'; }).join(''); }
+function anSelHtml(attr,key,list,val,blank){ return '<select '+attr+'="'+key+'">'+anOptHtml(list,val,blank)+'</select>'; }
+function anF(label,inner,wide){ return '<div class="an-f'+(wide?' wide':'')+'"><label>'+label+'</label>'+inner+'</div>'; }
+function anTxt(key,val,ph){ return '<input data-k="'+key+'" value="'+esc(val)+'"'+(ph?' placeholder="'+esc(ph)+'"':'')+'>'; }
+function anArea(key,val,rows){ return '<textarea data-k="'+key+'" rows="'+(rows||3)+'">'+esc(val)+'<\/textarea>'; }
+function anChecks(g,list,sel){ return '<div class="an-checks">'+list.map(function(x){ var id=Array.isArray(x)?x[0]:x, lb=Array.isArray(x)?x[1]:x; return '<label><input type="checkbox" data-g="'+g+'" value="'+esc(id)+'"'+((sel||[]).indexOf(id)>-1?' checked':'')+'><span>'+esc(lb)+'</span></label>'; }).join('')+'</div>'; }
+function anRisk(L,C){ var s=(Number(L)||0)*(Number(C)||0); if(!s) return {s:0,t:'—',c:'#8a9096'}; if(s<=4) return {s:s,t:'کم',c:'#2e7d4f'}; if(s<=9) return {s:s,t:'متوسط',c:'#b8860b'}; if(s<=16) return {s:s,t:'زیاد',c:'#d97f1f'}; return {s:s,t:'بحرانی',c:'#c0392b'}; }
+function anRiskBadge(L,C){ var r=anRisk(L,C); return r.s?'<span class="sev" style="background:'+r.c+'">امتیاز '+r.s+' — '+r.t+'</span>':'<span class="an-sub">امتیاز محاسبه می‌شود</span>'; }
+function anIsDone(x){ return x.status==='انجام شد'||x.status==='اثربخشی تأیید شد'; }
+function anIsOver(x){ if(!x.due||anIsDone(x)) return false; var d=dateNum(x.due), t=dateNum(todayJ()); return d>0 && d<t; }
+function anBadge(i){
+  var a=i.analysis, st=(a&&a.status)?a.status:AN_STATUS[0];
+  var col=st===AN_STATUS[0]?'#8a9096':(st===AN_STATUS[1]?'#d97f1f':'#2e7d4f');
+  var acts=(a&&a.actions)||[], done=acts.filter(anIsDone).length, over=acts.filter(anIsOver).length;
+  return '<span class="sev" style="background:'+col+'">'+esc(st)+'</span>'+(acts.length?'<div class="an-sub">اقدام: '+done+' از '+acts.length+(over?' — <b style="color:var(--bad)">'+over+' عقب‌افتاده</b>':'')+'</div>':'');
+}
+function anRowHtml(x,i){
+  x=x||{};
+  return '<tr data-ai="'+i+'"'+(anIsOver(x)?' class="an-over"':'')+'><td>'+(i+1)+'</td>'+
+   '<td><textarea data-af="title" rows="2">'+esc(x.title)+'<\/textarea></td>'+
+   '<td>'+anSelHtml('data-af','type',AN_ATYPE,x.type||AN_ATYPE[1],false)+'</td>'+
+   '<td>'+anSelHtml('data-af','control',AN_CTRL,x.control||AN_CTRL[3],false)+'</td>'+
+   '<td><input data-af="owner" value="'+esc(x.owner)+'" placeholder="مسئول"></td>'+
+   '<td><input data-af="due" value="'+esc(x.due)+'" placeholder="1405/01/30" style="direction:ltr;text-align:center"></td>'+
+   '<td>'+anSelHtml('data-af','status',AN_ASTAT,x.status||AN_ASTAT[0],false)+'</td>'+
+   '<td><input data-af="doneDate" value="'+esc(x.doneDate)+'" placeholder="تاریخ انجام" style="direction:ltr;text-align:center"></td>'+
+   '<td><button type="button" class="icon-btn danger" data-act="delAction" data-i="'+i+'">✕</button></td></tr>';
+}
+function anActionsHtml(a){
+  var acts=a.actions||[], done=acts.filter(anIsDone).length, pct=acts.length?Math.round(done/acts.length*100):0, over=acts.filter(anIsOver).length;
+  return '<div class="an-prog"><div class="an-bar"><i style="width:'+pct+'%"></i></div><span id="an-progtxt">'+(acts.length?done+' از '+acts.length+' اقدام انجام شده ('+pct+'٪)'+(over?' — '+over+' اقدام عقب‌افتاده':''):'هنوز اقدامی ثبت نشده است.')+'</span></div>'+
+   '<div class="an-tbl"><table class="an-t"><thead><tr><th>#</th><th style="min-width:230px">اقدام</th><th>نوع</th><th>سطح کنترل</th><th>مسئول</th><th>موعد</th><th>وضعیت</th><th>تاریخ انجام</th><th></th></tr></thead><tbody>'+
+   (acts.length?acts.map(anRowHtml).join(''):'<tr><td colspan="9" class="an-sub" style="padding:14px">اقدامی ثبت نشده — از «پیشنهاد اقدام» یا «افزودن اقدام» استفاده کنید.</td></tr>')+'</tbody></table></div>';
+}
+function anSugHtml(){
+  if(!AN_SUG.length) return '';
+  return '<div class="an-sugs"><div class="an-sub" style="margin-bottom:6px">پیشنهادها بر اساس تحلیل شما (هر کدام را که مناسب است اضافه کنید):</div>'+AN_SUG.map(function(s,k){
+    return '<div class="an-sug"><div><b>'+esc(s.title)+'</b><div class="an-sub">'+esc(s.type)+' — '+esc(s.control)+' — دلیل: '+esc(s.source)+'</div></div><button type="button" class="btn ghost" data-act="addSug" data-si="'+k+'">➕ افزودن</button></div>';
+  }).join('')+'</div>';
+}
+function anSuggest(a){
+  var out=[], seen={}, add=function(t,ty,lv,src){ if(seen[t]) return; seen[t]=1; out.push({title:t,type:ty,control:lv,source:src}); };
+  add('ایمن‌سازی و جداسازی محل حادثه تا پایان بررسی و جلوگیری از تکرار فوری حادثه',AN_ATYPE[0],AN_CTRL[3],'مهار فوری');
+  var ids=[].concat(a.acts||[],a.conds||[]); (AN_BYMECH[a.mechanism]||[]).forEach(function(x){ if(ids.indexOf(x)<0) ids.push(x); });
+  ids.forEach(function(id){ AN_ACTS.concat(AN_CONDS).forEach(function(x){ if(x[0]===id) add(x[2],AN_ATYPE[1],x[3],x[1]); }); });
+  if(a.ppe===AN_PPE[1]||a.ppe===AN_PPE[2]) add('بازآموزی الزام استفاده از PPE و بازرسی ورود به محل کار؛ بررسی تناسب و دسترسی تجهیزات',AN_ATYPE[1],AN_CTRL[4],'PPE کامل استفاده نشده بود');
+  if(a.training===AN_TRAIN[1]) add('آموزش ایمنی شغلی و ثبت در پرونده‌ی آموزشی فرد؛ ارزیابی صلاحیت پیش از واگذاری کار',AN_ATYPE[1],AN_CTRL[3],'فرد آموزش ندیده بود');
+  if(a.permit===AN_PERMIT[1]) add('الزام به صدور مجوز کار / دستورالعمل برای این نوع کار پیش از شروع',AN_ATYPE[1],AN_CTRL[3],'مجوز یا دستورالعمل وجود نداشت');
+  if(a.supervisor===AN_SUPER[1]) add('تعیین ناظر ایمنی برای کارهای مشابه و الزام به حضور ناظر',AN_ATYPE[2],AN_CTRL[3],'ناظر حاضر نبود');
+  add('بازآموزی فرد و هم‌گروه‌ها و اطلاع‌رسانی درس‌آموخته به همه‌ی واحدها',AN_ATYPE[2],AN_CTRL[3],'درس‌آموخته');
+  add('پیگیری اجرای اقدامات و ارزیابی اثربخشی آن‌ها پس از ۳۰ روز',AN_ATYPE[2],AN_CTRL[3],'پایش اثربخشی');
+  return out;
+}
+function anRelatedHtml(rec){
+  var others=INCIDENTS.filter(function(x){ return x!==rec; });
+  var same=function(f){ return others.filter(f); };
+  var person=same(function(x){ return rec.personnelCode ? String(x.personnelCode)===String(rec.personnelCode) : (rec.injuredName && normNm(x.injuredName)===normNm(rec.injuredName)); });
+  var loc=same(function(x){ return rec.location && normNm(x.location)===normNm(rec.location); });
+  var body=same(function(x){ return rec.bodyPart && normNm(x.bodyPart)===normNm(rec.bodyPart); });
+  var unit=same(function(x){ return rec.unit && x.unit===rec.unit; });
+  var st=function(n,l){ return '<div class="an-stat"><b>'+n+'</b><span>'+l+'</span></div>'; };
+  var notes=[];
+  if(person.length) notes.push('این فرد قبلاً '+person.length+' حادثه‌ی ثبت‌شده دارد؛ تناسب شغلی، آموزش و شرایط کاری او بازبینی شود.');
+  if(loc.length>=2) notes.push('در همین محل '+loc.length+' حادثه‌ی دیگر ثبت شده؛ احتمال ریشه‌ی مشترک در محل کار وجود دارد.');
+  if(body.length>=3) notes.push('آسیب به «'+esc(rec.bodyPart)+'» '+body.length+' بار دیگر هم تکرار شده؛ الگوی تکرار بررسی شود.');
+  return '<div class="an-stats">'+st(person.length,'حادثه‌ی قبلی همین فرد')+st(loc.length,'حادثه‌ی دیگر در همین محل')+st(body.length,'حادثه‌ی دیگر با همین عضو')+st(unit.length,'حادثه‌ی دیگر در همین واحد')+'</div>'+
+   (notes.length?'<div class="an-note">'+notes.map(function(n){return '⚠️ '+n;}).join('<br>')+'</div>':'')+
+   (person.length?'<div class="an-sub" style="margin:8px 0 4px">حوادث قبلی همین فرد:</div>'+person.map(function(x){ return '<div class="an-sug"><div><b>'+esc(x.date||'—')+'</b> — '+esc((x.description||'').slice(0,90))+'</div><button type="button" class="btn ghost" data-act="openInc" data-id="'+esc(x.id)+'">مشاهده</button></div>'; }).join(''):'');
+}
+function anHtml(rec,a){
+  var kv=function(l,v){ return '<div class="an-kv"><span>'+l+'</span><b>'+(esc(v)||'—')+'</b></div>'; };
+  var sevCol=SEV_COLOR[rec.severity]||'#8a9096';
+  var h='';
+  h+='<div class="an-card"><h3>📌 مشخصات حادثه</h3><div class="an-kvs">'+kv('کد پرسنلی',rec.personnelCode)+kv('نام حادثه‌دیده',rec.injuredName)+kv('واحد',rec.unit)+kv('شغل',rec.job)+kv('تاریخ',rec.date)+kv('محل حادثه',rec.location)+kv('عضو آسیب‌دیده',rec.bodyPart)+kv('روزهای از دست‌رفته',String(rec.lostDays==null?'':rec.lostDays))+
+     '<div class="an-kv"><span>نوع حادثه</span><b><span class="sev" style="background:'+sevCol+'">'+esc(rec.severity||'—')+'</span></b></div></div>'+
+     '<div class="an-desc"><span>شرح مختصر حادثه</span>'+esc(rec.description)+'</div></div>';
+  h+='<div class="an-card"><h3>🗂 طبقه‌بندی و مشخصات تکمیلی</h3><div class="an-grid">'+
+     anF('وضعیت بررسی',anSelHtml('data-k','status',AN_STATUS,a.status,false))+anF('طبقه‌بندی رویداد',anSelHtml('data-k','kind',AN_KIND,a.kind))+
+     anF('شماره گزارش',anTxt('reportNo',a.reportNo))+anF('تاریخ گزارش',anTxt('reportDate',a.reportDate,'1405/01/12'))+
+     anF('تیم بررسی حادثه',anTxt('team',a.team,'نام اعضای تیم'),true)+
+     anF('ساعت وقوع',anTxt('time',a.time,'مثلاً 14:30'))+anF('شیفت کاری',anSelHtml('data-k','shift',AN_SHIFT,a.shift))+
+     anF('نوع فعالیت در لحظه‌ی حادثه',anSelHtml('data-k','task',AN_TASK,a.task))+anF('مکانیزم وقوع (نحوه‌ی حادثه)',anSelHtml('data-k','mechanism',AN_MECH,a.mechanism))+
+     anF('ماهیت آسیب',anSelHtml('data-k','nature',AN_NATURE,a.nature))+anF('عامل / منبع حادثه',anSelHtml('data-k','agent',AN_AGENT,a.agent))+
+     anF('شاهدان',anTxt('witnesses',a.witnesses))+anF('هزینه‌ی مستقیم تقریبی (ریال)',anTxt('costDirect',a.costDirect))+
+     '</div></div>';
+  h+='<div class="an-card"><h3>🕒 شرح وقوع و وضعیت لحظه‌ی حادثه</h3><div class="an-grid">'+
+     anF('شرح گام‌به‌گام و ترتیب وقایع (قبل، حین و بعد از حادثه)',anArea('sequence',a.sequence,5),true)+
+     anF('مجوز کار / دستورالعمل',anSelHtml('data-k','permit',AN_PERMIT,a.permit))+anF('وضعیت استفاده از PPE',anSelHtml('data-k','ppe',AN_PPE,a.ppe))+
+     anF('توضیح PPE (کدام تجهیز؟)',anTxt('ppeDetail',a.ppeDetail))+anF('آموزش فرد برای این کار',anSelHtml('data-k','training',AN_TRAIN,a.training))+
+     anF('نظارت',anSelHtml('data-k','supervisor',AN_SUPER,a.supervisor))+anF('انتقال / درمان',anSelHtml('data-k','transfer',AN_TRANSFER,a.transfer))+
+     anF('اقدام فوری انجام‌شده در محل',anArea('immediate',a.immediate,2),true)+anF('مستندات و شواهد (عکس، فیلم، گزارش، مجوز کار...)',anTxt('evidence',a.evidence),true)+
+     '</div></div>';
+  h+='<div class="an-card"><h3>🔎 تحلیل علل</h3>'+
+     '<div class="an-sub2">اعمال ناایمن (رفتار و عملکرد)</div>'+anChecks('acts',AN_ACTS,a.acts)+
+     '<div class="an-sub2">شرایط ناایمن (محیط و تجهیزات)</div>'+anChecks('conds',AN_CONDS,a.conds)+
+     '<div class="an-sub2">علل ریشه‌ای به تفکیک ۶ عامل (انسان، ماشین، روش، مواد، محیط، مدیریت)</div><div class="an-grid">'+
+     AN_6M.map(function(m){ return anF(m[1],anArea('causes.'+m[0],a.causes[m[0]],2)); }).join('')+'</div>'+
+     '<div class="an-sub2">تحلیل «پنج چرا» (Why-Why)</div><div class="an-grid">'+
+     [0,1,2,3,4].map(function(k){ return anF('چرا '+(k+1)+'؟',anTxt('whys.'+k,a.whys[k]),true); }).join('')+
+     anF('بیانیه‌ی علت ریشه‌ای (نتیجه‌ی نهایی)',anArea('rootStatement',a.rootStatement,2),true)+'</div>'+
+     '<div class="an-sub2">ارزیابی ریسک (احتمال × شدت)</div><div class="an-grid">'+
+     anF('احتمال تکرار — قبل از اقدام',anSelHtml('data-k','rL',AN_RL,a.rL))+anF('شدت پیامد — قبل از اقدام',anSelHtml('data-k','rC',AN_RC,a.rC))+
+     '<div class="an-f"><label>ریسک قبل از اقدام</label><div id="an-risk1">'+anRiskBadge(a.rL,a.rC)+'</div></div>'+
+     anF('احتمال تکرار — پس از اقدام',anSelHtml('data-k','rrL',AN_RL,a.rrL))+anF('شدت پیامد — پس از اقدام',anSelHtml('data-k','rrC',AN_RC,a.rrC))+
+     '<div class="an-f"><label>ریسک باقی‌مانده</label><div id="an-risk2">'+anRiskBadge(a.rrL,a.rrC)+'</div></div></div></div>';
+  h+='<div class="an-card"><h3>🛠 اقدامات اصلاحی و پیشگیرانه (CAPA)</h3>'+
+     '<div class="an-btns noprint"><button type="button" class="btn" data-act="suggest">💡 پیشنهاد اقدام بر اساس تحلیل</button> <button type="button" class="btn ghost" data-act="addAction">➕ افزودن اقدام</button></div>'+
+     '<div id="an-sug">'+anSugHtml()+'</div><div id="an-actions">'+anActionsHtml(a)+'</div></div>';
+  h+='<div class="an-card"><h3>✅ اثربخشی، درس‌آموخته و ابلاغ</h3><div class="an-grid">'+
+     anF('ارزیابی‌کننده‌ی اثربخشی',anTxt('vBy',a.vBy))+anF('تاریخ ارزیابی',anTxt('vDate',a.vDate,'1405/02/30'))+anF('نتیجه‌ی ارزیابی',anSelHtml('data-k','vResult',AN_VRES,a.vResult))+
+     anF('درس‌های آموخته',anArea('lessons',a.lessons,3),true)+
+     '<div class="an-f wide"><label>روش اطلاع‌رسانی درس‌آموخته</label>'+anChecks('informed',AN_INFORMED,a.informed)+'</div>'+
+     '<div class="an-f wide"><label>گزارش به مراجع</label>'+anChecks('authorities',AN_AUTH,a.authorities)+'</div>'+
+     anF('تاریخ گزارش به مراجع',anTxt('authDate',a.authDate))+anF('تأییدکننده‌ی نهایی گزارش',anTxt('approvedBy',a.approvedBy))+'</div></div>';
+  h+='<div class="an-card"><h3>📊 سوابق مرتبط (خودکار)</h3>'+anRelatedHtml(rec)+'</div>';
+  return h;
+}
+function anSetPath(o,path,val){ var p=path.split('.'); for(var i=0;i<p.length-1;i++) o=o[p[i]]; o[p[p.length-1]]=val; }
+function anCollect(){
+  var a=anDefault(), root=document.getElementById('anBody');
+  root.querySelectorAll('[data-k]').forEach(function(el){ anSetPath(a,el.getAttribute('data-k'),el.value); });
+  ['acts','conds','informed','authorities'].forEach(function(g){ a[g]=Array.prototype.map.call(root.querySelectorAll('input[data-g="'+g+'"]:checked'),function(x){return x.value;}); });
+  a.actions=Array.prototype.map.call(root.querySelectorAll('tr[data-ai]'),function(tr){ var o={}; tr.querySelectorAll('[data-af]').forEach(function(el){ o[el.getAttribute('data-af')]=el.value; }); return o; })
+    .filter(function(o){ return (o.title||'').trim(); });
+  return a;
+}
+function anLive(){
+  var a=anCollect(), g=function(id){return document.getElementById(id);};
+  if(g('an-risk1')) g('an-risk1').innerHTML=anRiskBadge(a.rL,a.rC);
+  if(g('an-risk2')) g('an-risk2').innerHTML=anRiskBadge(a.rrL,a.rrC);
+  var acts=a.actions, done=acts.filter(anIsDone).length, pct=acts.length?Math.round(done/acts.length*100):0, over=acts.filter(anIsOver).length;
+  var bar=document.querySelector('#an-actions .an-bar i'); if(bar) bar.style.width=pct+'%';
+  if(g('an-progtxt')) g('an-progtxt').textContent=acts.length?done+' از '+acts.length+' اقدام انجام شده ('+pct+'٪)'+(over?' — '+over+' اقدام عقب‌افتاده':''):'هنوز اقدامی ثبت نشده است.';
+}
+function anReRenderActions(){
+  var g=function(id){return document.getElementById(id);};
+  g('an-actions').innerHTML=anActionsHtml(AN_A); g('an-sug').innerHTML=anSugHtml(); anApplyReadOnly();
+}
+function anApplyReadOnly(){
+  var ro=(window.__incCanEdit===false);
+  document.getElementById('anSave').style.display=ro?'none':'';
+  if(ro){ document.querySelectorAll('#anBody input,#anBody select,#anBody textarea,#anBody button[data-act]:not([data-act="openInc"])').forEach(function(el){ el.disabled=true; }); }
+}
+window.openIncident=function(id){
+  var rec=incFind(id); if(!rec) return;
+  if(AN_ID!==null && String(AN_ID)!==String(id) && AN_DIRTY && !confirm('تغییرات ذخیره‌نشده‌ی تحلیل فعلی از بین می‌رود. ادامه می‌دهید؟')) return;
+  AN_ID=rec.id; AN_DIRTY=false; AN_SUG=[];
+  AN_A=Object.assign(anDefault(), rec.analysis||{});
+  AN_A.causes=Object.assign(anDefault().causes, AN_A.causes||{});
+  AN_A.whys=(AN_A.whys||[]).concat(['','','','','']).slice(0,5);
+  document.getElementById('anTitle').textContent='تحلیل حادثه — '+(rec.injuredName||'')+(rec.date?' — '+rec.date:'');
+  document.getElementById('anBody').innerHTML=anHtml(rec,AN_A);
+  document.getElementById('anMsg').textContent='';
+  var d=document.getElementById('incDetail'); d.classList.remove('hidden'); d.scrollTop=0;
+  document.body.classList.add('inc-open'); document.body.style.overflow='hidden';
+  anApplyReadOnly();
+};
+function anClose(force){
+  if(!force && AN_DIRTY && !confirm('تغییرات ذخیره‌نشده از بین می‌رود. ادامه می‌دهید؟')) return false;
+  document.getElementById('incDetail').classList.add('hidden');
+  document.body.classList.remove('inc-open'); document.body.style.overflow='';
+  AN_ID=null; AN_DIRTY=false; return true;
+}
+async function dbSaveAnalysis(rec){
+  try{
+    var res=await window.__incSb.from('incidents').update({analysis:rec.analysis}).eq('id',rec.id).select('id');
+    if(res.error){
+      if(/analysis/i.test(res.error.message||'')) incFail('ستون analysis در جدول incidents وجود ندارد. فایل incident_analysis.sql را در Supabase اجرا کنید.',res.error);
+      else incFail('ذخیره‌ی تحلیل انجام نشد.',res.error);
+      return false;
+    }
+    if(!res.data||!res.data.length){ incFail('ذخیره‌ی تحلیل انجام نشد: رکورد پیدا نشد یا دسترسی ویرایش ندارید.'); return false; }
+    return true;
+  }catch(e){ incFail('ذخیره‌ی تحلیل انجام نشد.',e); return false; }
+}
+async function anSave(){
+  var rec=incFind(AN_ID); if(!rec) return;
+  var a=anCollect(), prev=rec.analysis; rec.analysis=a;
+  var btn=document.getElementById('anSave'); btn.disabled=true;
+  var ok=await dbSaveAnalysis(rec); btn.disabled=false;
+  if(!ok){ rec.analysis=prev; return; }
+  AN_A=a; AN_DIRTY=false; renderList();
+  var m=document.getElementById('anMsg'); m.textContent='✓ ذخیره شد'; setTimeout(function(){ m.textContent=''; },2500);
+}
+document.getElementById('anBack').addEventListener('click',function(){ anClose(); });
+document.getElementById('anSave').addEventListener('click',anSave);
+document.getElementById('anPrint').addEventListener('click',function(){
+  var old=document.title, r=incFind(AN_ID); document.title='تحلیل حادثه '+(r?(r.injuredName||'')+' '+(r.date||''):'');
+  var restore=function(){ document.title=old; window.removeEventListener('afterprint',restore); };
+  window.addEventListener('afterprint',restore); setTimeout(function(){ window.print(); },50);
+});
+document.getElementById('anEdit').addEventListener('click',function(){ var id=AN_ID; if(anClose()) window.startEditIncident(id); });
+(function(){
+  var body=document.getElementById('anBody');
+  body.addEventListener('input',function(){ AN_DIRTY=true; });
+  body.addEventListener('change',function(){ AN_DIRTY=true; anLive(); });
+  body.addEventListener('click',function(e){
+    var b=e.target.closest('button[data-act]'); if(!b) return;
+    var act=b.getAttribute('data-act');
+    if(act==='openInc'){ window.openIncident(b.getAttribute('data-id')); return; }
+    AN_A=anCollect();
+    if(act==='addAction'){ AN_A.actions.push({title:'',type:AN_ATYPE[1],control:AN_CTRL[3],status:AN_ASTAT[0]}); AN_DIRTY=true; anReRenderActions(); }
+    else if(act==='delAction'){ AN_A.actions.splice(parseInt(b.getAttribute('data-i'),10),1); AN_DIRTY=true; anReRenderActions(); }
+    else if(act==='suggest'){ AN_SUG=anSuggest(AN_A); anReRenderActions(); }
+    else if(act==='addSug'){ var s=AN_SUG[parseInt(b.getAttribute('data-si'),10)]; if(s){ AN_A.actions.push({title:s.title,type:s.type,control:s.control,status:AN_ASTAT[0]}); AN_SUG.splice(parseInt(b.getAttribute('data-si'),10),1); AN_DIRTY=true; anReRenderActions(); } }
+  });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape' && AN_ID!==null) anClose(); });
+  var prev=window.__appBack;
+  window.__appBack=function(){ if(AN_ID!==null){ anClose(); return true; } return prev?prev():false; };
+})();
+
 async function init(){
   try{
     await loadPersons();
@@ -6940,6 +7434,46 @@ table.rtbl tbody tr:hover{background:var(--gray-050)}
 .ph-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px}
 .ph-row:last-child{border-bottom:none}
 
+
+.dbtn{border:none;border-radius:8px;padding:8px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:var(--gray-900);color:#fff;border-top:2px solid var(--orange)}
+.dbtn:hover{background:var(--gray-700)}
+.dbtn.ghost{background:transparent;color:var(--gray-900);border:1.5px solid var(--border)}
+.add-panel{padding:18px;margin-top:14px}
+.add-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.add-grid .wide{grid-column:1/-1}
+.add-field label{display:block;font-size:11.5px;font-weight:700;color:var(--muted);margin-bottom:4px}
+.add-field input,.add-field select{width:100%;border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;font-family:inherit;font-size:13px;background:var(--bg);color:var(--text);outline:none;direction:rtl}
+.add-field input[readonly]{background:#eceef0;color:var(--gray-700)}
+.add-hint{grid-column:1/-1;font-size:12px;color:var(--muted);min-height:18px}
+.add-hint.ok{color:var(--g-c)}
+.add-hint.warn{color:var(--y-c)}
+.add-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+
+.an-kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.an-kpi{background:var(--gray-050);border:1px solid var(--border);border-top:3px solid var(--orange);border-radius:10px;padding:10px 16px;min-width:130px}
+.an-kpi b{display:block;font-size:20px;font-weight:800;color:var(--gray-900)}
+.an-kpi span{font-size:11.5px;color:var(--gray-700)}
+.an-insight{background:var(--orange-light);border:1px dashed var(--orange);border-radius:10px;padding:12px 16px;font-size:13px;line-height:2;margin-bottom:16px}
+.an-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.an-cols{grid-template-columns:1fr}}
+.an-col h3{font-size:13.5px;font-weight:800;margin-bottom:8px;color:var(--gray-900)}
+.an-item{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:#fff}
+.an-item summary{cursor:pointer;padding:10px 12px;display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;font-size:12.5px;list-style:none}
+.an-item summary::-webkit-details-marker{display:none}
+.an-rank{background:var(--gray-900);color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+.an-sub{font-size:11px;color:var(--muted);font-weight:400}
+.an-cnt{background:var(--y-bg);color:var(--y-c);border-radius:20px;padding:3px 12px;font-weight:800;font-size:12px;white-space:nowrap}
+.an-bar{height:5px;background:var(--gray-200);border-radius:3px;margin-top:5px;overflow:hidden}
+.an-bar i{display:block;height:100%;background:var(--orange)}
+.an-body{padding:6px 14px 12px;font-size:12px;border-top:1px solid var(--border);line-height:2}
+.an-body .row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--border)}
+.an-tag{background:var(--gr-bg);color:var(--gr-c);border-radius:10px;padding:1px 8px;font-size:10.5px;margin-right:6px}
+.an-rules{margin-top:18px;border-top:1px solid var(--border);padding-top:12px;font-size:12.5px}
+.an-rules summary{cursor:pointer;font-weight:700}
+.an-rule-form{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.an-rule-form input{flex:1 1 220px;border:1.5px solid var(--border);border-radius:8px;padding:7px 12px;font-family:inherit;font-size:13px;background:var(--bg);direction:rtl}
+.an-rule-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px dashed var(--border)}
+.an-rule-item button{border:none;background:none;color:var(--r-c);cursor:pointer;font-size:15px}
 .no-sheet-note{background:var(--orange-light);border:1px dashed var(--orange);border-radius:10px;padding:14px 16px;font-size:12.5px;color:var(--gray-800);margin-bottom:18px;line-height:2}
 </style>
 </head>
@@ -6963,6 +7497,41 @@ table.rtbl tbody tr:hover{background:var(--gray-050)}
   </div>
 
   <div id="listView">
+    <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap"><button class="dbtn" id="dAddBtn">➕ ثبت مورد جدید</button><button class="dbtn ghost" id="dAnBtn">📊 تحلیل اخطارها</button></div>
+    <div class="panel add-panel hidden" id="dAnalysis">
+      <div class="toolbar" style="margin:0 0 14px">
+        <span class="flabel">نوع موارد:</span>
+        <select class="finput" id="an-type"><option value="اخطار کتبی" selected>اخطار کتبی</option><option value="جریمه نقدی">جریمه نقدی</option><option value="neg">اخطار + جریمه</option><option value="تشویق">تشویق</option><option value="all">همه موارد</option></select>
+        <span class="flabel">نمایش:</span>
+        <select class="finput" id="an-top"><option value="10" selected>۱۰ نفر برتر</option><option value="20">۲۰ نفر برتر</option><option value="0">همه</option></select>
+        <span class="flabel" style="font-weight:400">فیلتر واحد و تاریخ بالای جدول هم اعمال می‌شود.</span>
+      </div>
+      <div id="an-out"></div>
+      <details class="an-rules"><summary>⚙️ یکسان‌سازی عبارات — افزودن قاعده‌ی جدید</summary>
+        <div class="an-rule-form"><input id="ru-label" placeholder="نام دسته (مثلاً عدم استفاده از کلاه ایمنی)"><input id="ru-kw" placeholder="کلمات کلیدی، با ویرگول جدا شود (مثلاً کلاه، هلمت)"><button class="dbtn" id="ru-add">افزودن</button></div>
+        <div id="ru-list"></div>
+        <div class="add-hint">هر علتی که شامل یکی از کلمات کلیدی باشد زیر همان دسته شمرده می‌شود. قاعده‌ها روی همین مرورگر ذخیره می‌شوند.</div>
+      </details>
+    </div>
+    <div class="panel add-panel hidden" id="dAddPanel">
+      <datalist id="dlDCodes"></datalist><datalist id="dlDNames"></datalist>
+      <div class="add-grid">
+        <div class="add-field"><label>کد پرسنلی</label><input id="a-code" list="dlDCodes" inputmode="numeric" placeholder="کد را وارد کنید" autocomplete="off"></div>
+        <div class="add-field"><label>نام و نام خانوادگی</label><input id="a-name" list="dlDNames"></div>
+        <div class="add-field"><label>واحد</label><input id="a-unit"></div>
+        <div class="add-field"><label>شغل</label><input id="a-job"></div>
+        <div class="add-hint" id="a-hint"></div>
+        <div class="add-field"><label>نوع اقدام</label><select id="a-type"><option>تشویق</option><option selected>اخطار کتبی</option><option>جریمه نقدی</option><option>سایر</option></select></div>
+        <div class="add-field"><label>تاریخ (مثال: 1405/01/12)</label><input id="a-date"></div>
+        <div class="add-field hidden" id="a-amount-wrap"><label>مبلغ جریمه (تومان)</label><input id="a-amount" inputmode="numeric"></div>
+        <div class="add-field"><label>شماره سند</label><input id="a-docno"></div>
+        <div class="add-field"><label>صادرکننده</label><input id="a-issuer"></div>
+        <div class="add-field"><label>وضعیت</label><input id="a-status"></div>
+        <div class="add-field wide"><label>علت</label><input id="a-reason"></div>
+        <div class="add-field wide"><label>شرح کامل</label><input id="a-desc"></div>
+      </div>
+      <div class="add-actions"><button class="dbtn ghost" id="a-cancel">انصراف</button><button class="dbtn" id="a-save">ذخیره</button></div>
+    </div>
     <div class="toolbar">
       <span class="flabel">جستجو (نام/کد پرسنلی/علت):</span>
       <input type="text" class="finput" id="dSrch" placeholder="متن جستجو...">
@@ -7084,17 +7653,19 @@ async function sheetGet(name){
 async function init(){
   const [discRows, personRows] = await Promise.all([sheetGet('Discipline'), sheetGet('Personnel')]);
 
-  (personRows||[]).forEach(r=>{ const p=__rowToPersonnel(r); if(p.name) PERSONNEL_MAP[p.name]=p; if(p.code) PERSONNEL_BY_CODE[p.code]=p; });
+  (personRows||[]).forEach(r=>{ const p=__rowToPersonnel(r); if(p.name) PERSONNEL_MAP[p.name]=p; if(p.code){ PERSONNEL_BY_CODE[p.code]=p; PERSON_EN[toEn(p.code).trim()]=p; } });
 
   if(discRows && discRows.length){
-    ALL_RECORDS = discRows.map(__rowToDiscipline).filter(d=>d.name);
+    ALL_RECORDS = discRows.map(__rowToDiscipline).filter(d=>d.name||d.personnelCode);
     // اگر واحد در ردیف خالی بود، از روی پرونده پرسنلی پر می‌شود
     ALL_RECORDS.forEach(d=>{
       if(!d.personnelCode && PERSONNEL_MAP[d.name]) d.personnelCode = PERSONNEL_MAP[d.name].code||'';
       // واحد و شغل از روی کد پرسنلی (در نبود کد، از روی نام) گرفته می‌شود
-      const pp = (d.personnelCode && PERSONNEL_BY_CODE[d.personnelCode]) || PERSONNEL_MAP[d.name];
-      if(pp){ if(pp.unit) d.unit = pp.unit; d.job = pp.job||''; }
+      const byCode = d.personnelCode ? PERSON_EN[toEn(d.personnelCode).trim()] : null;
+      const pp = byCode || PERSONNEL_MAP[d.name];
+      if(pp){ if(byCode && pp.name) d.name = pp.name; if(pp.unit) d.unit = pp.unit; d.job = pp.job||''; }
     });
+    ALL_RECORDS = ALL_RECORDS.filter(d=>d.name);
   } else {
     const note = document.getElementById('noSheetNote');
     note.classList.remove('hidden');
@@ -7104,6 +7675,8 @@ async function init(){
   populateUnitFilter();
   renderKpis();
   renderTable();
+  initAddForm();
+  initAnalysis();
 
   document.getElementById('dSrch').addEventListener('input', e=>{ dSearch=e.target.value.trim(); renderTable(); });
   document.getElementById('dUnit').addEventListener('change', e=>{ dUnit=e.target.value; renderTable(); });
@@ -7231,6 +7804,218 @@ function openDetail(idx){
 function closeDetail(){
   document.getElementById('detailView').classList.add('hidden');
   document.getElementById('listView').classList.remove('hidden');
+}
+
+
+/* ===== ثبت مورد جدید با پر شدن خودکار از روی کد پرسنلی ===== */
+let PERSON_EN = {};
+function findByCode(code){ const c=toEn(code).trim(); return c ? (PERSON_EN[c]||null) : null; }
+function todayJalali(){
+  try{ return toEn(new Date().toLocaleDateString('fa-IR-u-nu-latn-ca-persian',{year:'numeric',month:'2-digit',day:'2-digit'})).replace(/[^0-9\/]/g,''); }catch(e){ return ''; }
+}
+function initAddForm(){
+  const g = id=>document.getElementById(id);
+  Object.keys(PERSONNEL_BY_CODE).forEach(k=>{ PERSON_EN[toEn(k).trim()] = PERSONNEL_BY_CODE[k]; });
+  g('dlDCodes').innerHTML = Object.keys(PERSON_EN).map(c=>'<option value="'+esc(c)+'">'+esc(PERSON_EN[c].name)+'</option>').join('');
+  g('dlDNames').innerHTML = Object.keys(PERSON_EN).map(c=>'<option value="'+esc(PERSON_EN[c].name)+'">'+esc(c)+'</option>').join('');
+  const nmKey = x=>String(x||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\s]+/g,'').trim();
+  const lock = on=>['a-name','a-unit','a-job'].forEach(k=>{ g(k).readOnly = on; });
+  const hint = (t,c)=>{ const h=g('a-hint'); h.textContent=t; h.className='add-hint '+(c||''); };
+  const onCode = ()=>{
+    const v = g('a-code').value, p = findByCode(v);
+    if(p){ g('a-name').value=p.name||''; g('a-unit').value=p.unit||''; g('a-job').value=p.job||''; lock(true); hint('نام، واحد و شغل از فهرست پرسنل پر شد.','ok'); }
+    else { lock(false); hint(v.trim() ? 'این کد در فهرست پرسنل پیدا نشد؛ نام، واحد و شغل را دستی وارد کنید.' : '', 'warn'); }
+  };
+  g('a-code').addEventListener('input', onCode);
+  const nameToCode = ()=>{
+    if(g('a-name').readOnly || g('a-code').value.trim()) return;
+    const k = nmKey(g('a-name').value); if(!k) return;
+    const m = Object.keys(PERSON_EN).filter(c=>nmKey(PERSON_EN[c].name)===k);
+    if(m.length===1){ g('a-code').value = m[0]; onCode(); }
+    else if(m.length>1){ hint('چند نفر با این نام وجود دارند؛ کد پرسنلی را وارد کنید.','warn'); }
+  };
+  g('a-name').addEventListener('change', nameToCode);
+  g('a-name').addEventListener('input', e=>{ if(!e.inputType || e.inputType==='insertReplacementText') nameToCode(); });
+  g('a-type').addEventListener('change', ()=>{ g('a-amount-wrap').classList.toggle('hidden', g('a-type').value!=='جریمه نقدی'); });
+  const reset = ()=>{
+    ['a-code','a-name','a-unit','a-job','a-amount','a-docno','a-issuer','a-status','a-reason','a-desc'].forEach(k=>g(k).value='');
+    g('a-type').value='اخطار کتبی'; g('a-date').value=todayJalali(); g('a-amount-wrap').classList.add('hidden'); lock(false); hint('');
+  };
+  g('dAddBtn').addEventListener('click', ()=>{ const pn=g('dAddPanel'); if(pn.classList.contains('hidden')){ reset(); pn.classList.remove('hidden'); g('a-code').focus(); } else pn.classList.add('hidden'); });
+  g('a-cancel').addEventListener('click', ()=>g('dAddPanel').classList.add('hidden'));
+  g('a-save').addEventListener('click', async ()=>{
+    const code = toEn(g('a-code').value).trim(), name = g('a-name').value.trim();
+    if(!name){ alert('نام را وارد کنید (یا کد پرسنلی معتبر وارد کنید).'); return; }
+    const type = g('a-type').value;
+    const amt = type==='جریمه نقدی' ? toEn(g('a-amount').value).replace(/[^0-9]/g,'') : '';
+    const row = { name, unit:g('a-unit').value.trim(), type, date:toEn(g('a-date').value.trim()), reason:g('a-reason').value.trim(),
+      description:g('a-desc').value.trim(), amount:amt, documentNo:g('a-docno').value.trim(), issuedBy:g('a-issuer').value.trim(), status:g('a-status').value.trim() };
+    const btn = g('a-save'); btn.disabled = true;
+    try{
+      let res = await window.__discSb.from('discipline').insert(Object.assign({personnel_code:code}, row));
+      let noCol = false;
+      if(res.error && /personnel_code/i.test(res.error.message||'')){ noCol = true; res = await window.__discSb.from('discipline').insert(row); }
+      if(res.error){ alert('خطا در ذخیره: '+(res.error.message||res.error)); return; }
+      ALL_RECORDS.unshift(__rowToDiscipline(Object.assign({personnel_code:code}, row)));
+      ALL_RECORDS[0].job = g('a-job').value.trim();
+      renderKpis(); renderTable(); if(window.__anRefresh) window.__anRefresh();
+      g('dAddPanel').classList.add('hidden');
+      if(noCol) alert('ذخیره شد، اما ستون personnel_code در جدول discipline وجود ندارد و کد پرسنلی ذخیره نشد. برای ذخیره‌ی کد، ستون را در Supabase اضافه کنید.');
+    }catch(e){ alert('خطا: '+(e.message||e)); }
+    finally{ btn.disabled = false; }
+  });
+}
+
+/* ===== تحلیل: بیشترین اخطار و علت‌ها + یکسان‌سازی عبارات ===== */
+const DEF_RULES = [
+  ['عدم استفاده از کلاه ایمنی','کلاه|هلمت'],
+  ['عدم استفاده از کفش/پوتین ایمنی','کفش|پوتین|بوت ایمنی'],
+  ['عدم استفاده از عینک ایمنی','عینک'],
+  ['عدم استفاده از ماسک تنفسی','ماسک|تنفسی'],
+  ['عدم استفاده از محافظ گوش','ایر ?پلاگ|ایر ?ماف|گوشی ایمنی|محافظ گوش'],
+  ['عدم استفاده از دستکش','دستکش'],
+  ['عدم استفاده از لباس کار/جلیقه','لباس|جلیقه|یونیفرم|رفلکتور|شب ?نما'],
+  ['عدم استفاده از کمربند ایمنی/تجهیزات ارتفاع','کمربند|هارنس|ارتفاع'],
+  ['عدم استفاده از تجهیزات حفاظت فردی (کلی)','تجهیزات حفاظت|حفاظت فردی|وسایل حفاظت|وسایل ایمنی|تجهیزات ایمنی|ppe|ایمنی فردی'],
+  ['تاخیر در حضور','تاخیر|دیرکرد|دیر (امدن|اومدن|رسیدن|حاضر|وارد)'],
+  ['غیبت','غیبت|غیر ?موجه|عدم حضور|حاضر نشد|نیامدن|نیامد'],
+  ['ترک محل کار','ترک محل|ترک کار|ترک پست|خروج بدون|خروج غیر'],
+  ['استعمال دخانیات','سیگار|دخانیات|قلیان|چپق'],
+  ['استفاده از موبایل','موبایل|تلفن همراه|گوشی همراه|تلفن|مکالمه'],
+  ['تخلف رانندگی/سرعت غیرمجاز','سرعت|رانندگی|تخلف راننده|ترافیک'],
+  ['خواب در محل کار','(^| )خواب(یدن|ید)?( |$)|چرت'],
+  ['درگیری/بی‌احترامی','درگیری|احترام|توهین|پرخاش|ناسزا|فحاش|بد ?اخلاق'],
+  ['عدم اجرای دستور / سرپیچی','سرپیچی|نافرمان|عدم اجرای دستور|عدم انجام دستور|اجرا نکردن دستور'],
+  ['عدم رعایت نظم و نظافت','نظافت|نظم|پاکیزگی'],
+  ['خسارت به تجهیزات','خسارت|تخریب|اسیب به|اسیب رساندن'],
+  ['عدم رعایت اصول و دستورالعمل‌های ایمنی (کلی)','ایمنی|دستورالعمل|مقررات|اصول|قوانین', true]
+];
+let USER_RULES = [];
+function loadUserRules(){ try{ USER_RULES = JSON.parse(localStorage.getItem('disc_rules_v1')||'[]')||[]; }catch(e){ USER_RULES=[]; } }
+function saveUserRules(){ try{ localStorage.setItem('disc_rules_v1', JSON.stringify(USER_RULES)); }catch(e){} }
+function nrm(s){
+  return toEn(s||'').replace(/[\u064B-\u065F\u0670\u0640]/g,'').replace(/ي/g,'ی').replace(/ك/g,'ک')
+    .replace(/[أإآٱ]/g,'ا').replace(/ؤ/g,'و').replace(/ئ/g,'ی').replace(/ۀ|ة/g,'ه')
+    .replace(/[\u200c\u200f\u200e]/g,' ').replace(/[.,،؛;:!؟?()\[\]\-_\/\\"'«»]/g,' ')
+    .replace(/\s+/g,' ').trim().toLowerCase();
+}
+function escRe(x){ return x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+function compiledRules(){
+  const out=[];
+  USER_RULES.forEach(r=>{ const kws=(r.kw||[]).map(nrm).filter(Boolean).map(escRe); if(kws.length) out.push({label:r.label, re:new RegExp(kws.join('|')), gen:false}); });
+  DEF_RULES.forEach(r=>out.push({label:r[0], re:new RegExp(r[1]), gen:!!r[2]}));
+  return out;
+}
+function classify(text, rules){
+  const t = nrm(text);
+  if(!t) return {labels:['بدون علت ثبت‌شده'], matched:true};
+  const hit=[]; let gen=null;
+  rules.forEach(r=>{ if(r.re.test(t)){ if(r.gen){ gen = gen||r.label; } else if(hit.indexOf(r.label)<0) hit.push(r.label); } });
+  if(hit.length) return {labels:hit, matched:true};
+  if(gen) return {labels:[gen], matched:true};
+  let k=t;
+  for(let i=0;i<3;i++) k=k.replace(/^(عدم رعایت|عدم استفاده از|عدم انجام|رعایت نکردن|استفاده نکردن از|انجام ندادن|عدم|نداشتن|ندادن|بدون)\s+/,'');
+  k=k.replace(/\s+(نکردن|ننمودن|نداشتن|ندادن)$/,'');
+  return {labels:['«'+(k||t)+'»'], matched:false};
+}
+function anRecords(){
+  const t=document.getElementById('an-type').value;
+  return ALL_RECORDS.filter(r=>{
+    if(t==='neg'){ if(r.type!=='اخطار کتبی' && r.type!=='جریمه نقدی') return false; }
+    else if(t!=='all' && r.type!==t) return false;
+    if(dUnit && r.unit!==dUnit) return false;
+    if(dFrom && !(r.date && r.date>=dFrom)) return false;
+    if(dTo && !(r.date && r.date<=dTo)) return false;
+    return true;
+  });
+}
+function renderAnalysis(){
+  const box=document.getElementById('an-out');
+  const recs=anRecords(), rules=compiledRules();
+  if(!recs.length){ box.innerHTML='<div class="empty-note">موردی برای تحلیل پیدا نشد.</div>'; renderRuleList(); return; }
+  const P={}, R={};
+  recs.forEach(r=>{
+    const pk = r.personnelCode ? 'c'+toEn(r.personnelCode).trim() : 'n'+nrm(r.name);
+    const p = P[pk] || (P[pk]={name:r.name, code:r.personnelCode, unit:r.unit, n:0, reasons:{}});
+    p.n++;
+    const raw=(r.reason||r.description||'').trim();
+    const c=classify(raw, rules);
+    c.labels.forEach(l=>{
+      p.reasons[l]=(p.reasons[l]||0)+1;
+      const g = R[l] || (R[l]={label:l, n:0, people:{}, variants:{}, unmatched:!c.matched});
+      g.n++; g.people[pk]=(g.people[pk]||0)+1;
+      const v = raw||'—'; g.variants[v]=(g.variants[v]||0)+1;
+    });
+  });
+  const plist=Object.keys(P).map(k=>Object.assign({key:k},P[k])).sort((a,b)=>(b.n-a.n)||String(a.name).localeCompare(String(b.name),'fa'));
+  const rlist=Object.keys(R).map(k=>R[k]).sort((a,b)=>b.n-a.n);
+  const top=parseInt(document.getElementById('an-top').value,10)||plist.length;
+  const maxP=plist[0].n, maxR=rlist[0].n;
+  const sortedEntries=o=>Object.keys(o).map(k=>[k,o[k]]).sort((a,b)=>b[1]-a[1]);
+  const pct=n=>(Math.round(n/recs.length*1000)/10).toLocaleString('en-US')+'٪';
+
+  const topP=plist[0], topR=rlist[0];
+  const tie=plist.filter(x=>x.n===topP.n);
+  const insight='بیشترین تعداد: <b>'+esc(tie.map(x=>x.name).slice(0,3).join('، '))+(tie.length>3?' و '+(tie.length-3)+' نفر دیگر':'')+'</b> با <b>'+topP.n+'</b> مورد. '
+    +'شایع‌ترین علت: <b>'+esc(topR.label)+'</b> ('+topR.n+' مورد، '+pct(topR.n)+' از کل).';
+  const kpis='<div class="an-kpis">'
+    +'<div class="an-kpi"><b>'+recs.length+'</b><span>مورد تحلیل‌شده</span></div>'
+    +'<div class="an-kpi"><b>'+plist.length+'</b><span>تعداد افراد</span></div>'
+    +'<div class="an-kpi"><b>'+rlist.length+'</b><span>تعداد دسته‌ی علت (پس از یکسان‌سازی)</span></div></div>';
+
+  const pHtml=plist.slice(0,top).map((p,i)=>{
+    const rs=sortedEntries(p.reasons);
+    return '<details class="an-item"><summary><span class="an-rank">'+(i+1)+'</span>'
+      +'<span><b>'+esc(p.name)+'</b> <span class="an-sub">'+(p.code?'کد '+esc(p.code)+' — ':'')+esc(p.unit||'—')+'</span>'
+      +'<div class="an-sub">بیشترین علت: '+esc(rs[0][0])+(rs[0][1]>1?' ('+rs[0][1]+')':'')+'</div>'
+      +'<div class="an-bar"><i style="width:'+Math.round(p.n/maxP*100)+'%"></i></div></span>'
+      +'<span class="an-cnt">'+p.n+' مورد</span></summary>'
+      +'<div class="an-body">'+rs.map(e=>'<div class="row"><span>'+esc(e[0])+'</span><b>'+e[1]+'</b></div>').join('')+'</div></details>';
+  }).join('');
+
+  const rHtml=rlist.map((g,i)=>{
+    const vs=sortedEntries(g.variants).slice(0,30);
+    const ps=sortedEntries(g.people).slice(0,5).map(e=>'<div class="row"><span>👤 '+esc(P[e[0]].name)+'</span><b>'+e[1]+'</b></div>').join('');
+    return '<details class="an-item"><summary><span class="an-rank">'+(i+1)+'</span>'
+      +'<span><b>'+esc(g.label)+'</b>'+(g.unmatched?'<span class="an-tag">دسته‌بندی‌نشده</span>':'')
+      +'<div class="an-sub">'+Object.keys(g.people).length+' نفر — '+pct(g.n)+' از موارد</div>'
+      +'<div class="an-bar"><i style="width:'+Math.round(g.n/maxR*100)+'%"></i></div></span>'
+      +'<span class="an-cnt">'+g.n+' مورد</span></summary>'
+      +'<div class="an-body"><div class="an-sub">عبارت‌های ثبت‌شده که در این دسته جمع شده‌اند:</div>'
+      +vs.map(e=>'<div class="row"><span>'+esc(e[0])+'</span><b>'+e[1]+'</b></div>').join('')
+      +'<div class="an-sub" style="margin-top:8px">بیشترین تکرار:</div>'+ps+'</div></details>';
+  }).join('');
+
+  box.innerHTML='<div class="an-insight">'+insight+'</div>'+kpis
+    +'<div class="an-cols"><div class="an-col"><h3>👤 بیشترین اخطار به تفکیک فرد</h3>'+pHtml+'</div>'
+    +'<div class="an-col"><h3>❓ علت‌ها (یکسان‌سازی‌شده)</h3>'+rHtml
+    +'<div class="an-sub">یک علت ممکن است در چند دسته بشمارد (مثلاً «بدون کلاه و کفش»)، پس جمع درصدها می‌تواند از ۱۰۰ بیشتر شود.</div></div></div>';
+  renderRuleList();
+}
+function renderRuleList(){
+  const el=document.getElementById('ru-list'); if(!el) return;
+  el.innerHTML=USER_RULES.map((r,i)=>'<div class="an-rule-item"><span><b>'+esc(r.label)+'</b> ← '+esc((r.kw||[]).join('، '))+'</span><button data-i="'+i+'" title="حذف">✕</button></div>').join('');
+}
+function initAnalysis(){
+  loadUserRules();
+  const g=id=>document.getElementById(id);
+  const visible=()=>!g('dAnalysis').classList.contains('hidden');
+  g('dAnBtn').addEventListener('click',()=>{ g('dAnalysis').classList.toggle('hidden'); if(visible()) renderAnalysis(); });
+  ['an-type','an-top'].forEach(id=>g(id).addEventListener('change',renderAnalysis));
+  [['dUnit','change'],['dFrom','input'],['dTo','input']].forEach(x=>g(x[0]).addEventListener(x[1],()=>{ if(visible()) renderAnalysis(); }));
+  g('ru-add').addEventListener('click',()=>{
+    const label=g('ru-label').value.trim();
+    const kw=g('ru-kw').value.split(/[,،|\n]/).map(x=>x.trim()).filter(Boolean);
+    if(!label||!kw.length){ alert('نام دسته و حداقل یک کلمه‌ی کلیدی را وارد کنید.'); return; }
+    USER_RULES.push({label:label, kw:kw}); saveUserRules();
+    g('ru-label').value=''; g('ru-kw').value=''; renderAnalysis();
+  });
+  g('ru-list').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-i]'); if(!b) return;
+    USER_RULES.splice(parseInt(b.dataset.i,10),1); saveUserRules(); renderAnalysis();
+  });
+  window.__anRefresh=()=>{ if(visible()) renderAnalysis(); };
+  renderRuleList();
 }
 
 window.addEventListener('error', function(e){
@@ -17482,7 +18267,7 @@ table.rt td:first-child{text-align:right;font-weight:700;color:var(--gray-800)}
     <button class="btn ghost" id="btnXlsx">دانلود فایل اکسل اصلی</button>
     <button class="btn" id="btnAddGhq">+ افزودن پرسشنامه جدید</button>
   </div>
-  <datalist id="dlCodes"></datalist>
+  <datalist id="dlCodes"></datalist><datalist id="dlNames"></datalist>
   <div id="ghqPanel"></div>
   <div class="panel table-wrap"><table class="atbl" id="ghqTable"></table></div>
   <div id="ghqEmpty" class="empty-note hidden">موردی یافت نشد — از دکمه «افزودن پرسشنامه جدید» شروع کن.</div>
@@ -17712,7 +18497,7 @@ function formHtml(r){
   });
   return '<div class="edit-panel"><div class="edit-grid three">'+
     '<div class="edit-field"><label>کد پرسنلی</label><input id="g-code" list="dlCodes" value="'+esc(r.personnelCode)+'"></div>'+
-    '<div class="edit-field"><label>نام و نام خانوادگی</label><input id="g-name" value="'+esc(r.name)+'"></div>'+
+    '<div class="edit-field"><label>نام و نام خانوادگی</label><input id="g-name" list="dlNames" value="'+esc(r.name)+'"></div>'+
     '<div class="edit-field"><label>تاریخ تکمیل</label><input id="g-date" value="'+esc(r.date)+'"></div>'+
     '<div class="edit-field"><label>واحد</label><input id="g-unit" value="'+esc(r.unit)+'"></div>'+
     '<div class="edit-field"><label>شغل</label><input id="g-job" value="'+esc(r.job)+'"></div>'+
@@ -17727,6 +18512,22 @@ function formHtml(r){
     '<div class="hint" id="g-live" style="margin-top:10px;font-weight:700;color:var(--gray-800)"></div>'+
     '<div class="edit-actions"><button class="btn ghost" onclick="document.getElementById(\'ghqPanel\').innerHTML=\'\'">انصراف</button><button class="btn" id="g-save">ذخیره</button></div></div>';
 }
+
+function normNm(s){ return String(s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\s]+/g,'').trim(); }
+function linkNameToCode(codeId, nameId){
+  var d=document.getElementById('dlNames');
+  if(d && !d.options.length) d.innerHTML=PERSONS.map(function(p){return '<option value="'+esc(p.name)+'">'+esc(p.code)+'</option>';}).join('');
+  var nm=document.getElementById(nameId), cd=document.getElementById(codeId);
+  if(!nm||!cd) return;
+  var go=function(){
+    if(nm.readOnly||String(cd.value).trim()) return;
+    var k=normNm(nm.value); if(!k) return;
+    var m=PERSONS.filter(function(p){return normNm(p.name)===k;});
+    if(m.length===1){ cd.value=m[0].code; cd.dispatchEvent(new Event('input')); }
+  };
+  nm.addEventListener('change',go);
+  nm.addEventListener('input',function(e){ if(!e.inputType||e.inputType==='insertReplacementText') go(); });
+}
 function wireForm(id){
   const g=function(x){return document.getElementById(x);};
   const onCode=function(){
@@ -17734,7 +18535,7 @@ function wireForm(id){
     if(p){ g('g-name').value=p.name||''; g('g-unit').value=p.unit||''; g('g-job').value=p.job||''; lock(true); g('g-hint').textContent='نام، واحد و شغل از فهرست پرسنل پر شد.'; }
     else { lock(false); g('g-hint').textContent=g('g-code').value.trim()?'این کد در فهرست پرسنل پیدا نشد؛ مشخصات را دستی وارد کنید.':''; }
   };
-  g('g-code').addEventListener('input',onCode); onCode();
+  g('g-code').addEventListener('input',onCode); onCode(); linkNameToCode('g-code','g-name');
   const live=function(){
     var a=[],n=0; for(var i=0;i<28;i++){ var v=g('q-'+i).value; if(v!==''){ n++; a.push(Number(v)); } else a.push(0); }
     var c=calc({answers:a}); g('g-live').textContent='پاسخ‌داده‌شده: '+n+' از ۲۸ — نمره کل: '+c.total+' ('+c.cat+')  |  '+SUBS.map(function(s,i){return s[0]+': '+c.subs[i];}).join(' · ');
@@ -17943,7 +18744,7 @@ table.rt td:first-child{text-align:right;font-weight:700;color:var(--gray-800)}
     <span class="flabel">اثر بر روحیه:</span><select class="finput" id="fImpact"><option value="">همه</option></select>
     <span class="flabel">وضعیت پیگیری:</span><select class="finput" id="fStatus"><option value="">همه</option></select>
   </div>
-  <datalist id="dlCodes"></datalist>
+  <datalist id="dlCodes"></datalist><datalist id="dlNames"></datalist>
   <div id="fbPanel"></div>
   <div class="panel table-wrap"><table class="atbl" id="fbTable"></table></div>
   <div id="fbEmpty" class="empty-note hidden">موردی یافت نشد — از دکمه «ثبت بازخورد جدید» شروع کن.</div>
@@ -18159,7 +18960,7 @@ function formHtml(i){
   return '<div class="edit-panel"><div class="edit-grid three">'+
     '<div class="edit-field"><label>تاریخ (مثال: ۱۴۰۵/۰۱/۱۲)</label><input id="b-date" value="'+esc(i.date)+'"></div>'+
     '<div class="edit-field"><label>کد پرسنلی (اختیاری)</label><input id="b-code" list="dlCodes" value="'+esc(i.personnelCode)+'"></div>'+
-    '<div class="edit-field"><label>نام ثبت‌کننده</label><input id="b-name" value="'+esc(i.name)+'"></div>'+
+    '<div class="edit-field"><label>نام ثبت‌کننده</label><input id="b-name" list="dlNames" value="'+esc(i.name)+'"></div>'+
     '<div class="edit-field"><label>واحد</label><input id="b-unit" value="'+esc(i.unit)+'"></div>'+
     '<div class="edit-field"><label>شغل</label><input id="b-job" value="'+esc(i.job)+'"></div>'+
     '<div class="edit-field"><label>ناشناس ثبت شود؟</label><select id="b-anon"><option value="0"'+(i.anonymous?'':' selected')+'>خیر</option><option value="1"'+(i.anonymous?' selected':'')+'>بله</option></select></div>'+
@@ -18176,11 +18977,27 @@ function formHtml(i){
     '<div class="edit-field"><label>اقدام اصلاحی / پاسخ</label><textarea id="b-act">'+esc(i.action)+'<\/textarea></div></div>'+
     '<div class="edit-actions"><button class="btn ghost" onclick="document.getElementById(\'fbPanel\').innerHTML=\'\'">انصراف</button><button class="btn" id="b-save">ذخیره</button></div></div>';
 }
+
+function normNm(s){ return String(s||'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/[\u200c\s]+/g,'').trim(); }
+function linkNameToCode(codeId, nameId){
+  var d=document.getElementById('dlNames');
+  if(d && !d.options.length) d.innerHTML=PERSONS.map(function(p){return '<option value="'+esc(p.name)+'">'+esc(p.code)+'</option>';}).join('');
+  var nm=document.getElementById(nameId), cd=document.getElementById(codeId);
+  if(!nm||!cd) return;
+  var go=function(){
+    if(nm.readOnly||String(cd.value).trim()) return;
+    var k=normNm(nm.value); if(!k) return;
+    var m=PERSONS.filter(function(p){return normNm(p.name)===k;});
+    if(m.length===1){ cd.value=m[0].code; cd.dispatchEvent(new Event('input')); }
+  };
+  nm.addEventListener('change',go);
+  nm.addEventListener('input',function(e){ if(!e.inputType||e.inputType==='insertReplacementText') go(); });
+}
 function wireForm(id){
   const g=function(x){return document.getElementById(x);};
   const onCode=function(){ const p=findPerson(g('b-code').value), lock=function(on){['b-name','b-unit','b-job'].forEach(function(k){g(k).readOnly=on;});};
     if(p){ g('b-name').value=p.name||''; g('b-unit').value=p.unit||''; g('b-job').value=p.job||''; lock(true); g('b-hint').textContent='نام، واحد و شغل از فهرست پرسنل پر شد.'; } else { lock(false); g('b-hint').textContent=g('b-code').value.trim()?'این کد در فهرست پرسنل پیدا نشد؛ دستی وارد کنید.':''; } };
-  g('b-code').addEventListener('input',onCode); onCode();
+  g('b-code').addEventListener('input',onCode); onCode(); linkNameToCode('b-code','b-name');
   g('b-save').addEventListener('click',async function(){
     const desc=g('b-desc').value.trim(); if(!desc){ alert('شرح بازخورد الزامی است.'); return; } if(!g('b-sent').value){ alert('جهت‌گیری (رضایت / عدم رضایت / خنثی) را انتخاب کنید.'); return; }
     const vals={ date:g('b-date').value.trim(), personnelCode:g('b-code').value.trim(), name:g('b-name').value.trim(), unit:g('b-unit').value.trim(), job:g('b-job').value.trim(), anonymous:g('b-anon').value==='1',
